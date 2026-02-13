@@ -1,1 +1,5 @@
-streamlit
+streamlit>=1.39,<2
+pandas>=2.2,<3
+matplotlib>=3.9,<4
+qrcode[pil]>=7.4,<8
+Pillow>=10,<12
