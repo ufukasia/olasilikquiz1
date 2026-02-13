@@ -26,8 +26,8 @@ from matplotlib import patches
 from matplotlib import pyplot as plt
 
 ENV_PATH = Path(".env")
-TEACHER_CODE_HASH_KEY = "e6c92c8b5ba44a52fe2a09170fa9871282261aaddf682cc12d52dbfdc428779d"
-PUBLIC_BASE_URL_KEY = "https://otuolasilikquiz1.streamlit.app/"
+TEACHER_CODE_HASH_KEY = "TEACHER_CODE_HASH"
+PUBLIC_BASE_URL_KEY = "PUBLIC_BASE_URL"
 TEACHER_OPTIONS = [
     "Prof. Dr. Yalçın ATA",
     "Prof. Dr. Arif DEMİR",
