@@ -27,6 +27,7 @@ from matplotlib import pyplot as plt
 
 ENV_PATH = Path(".env")
 TEACHER_CODE_HASH_KEY = "TEACHER_CODE_HASH"
+TEACHER_CODE_KEY = "TEACHER_CODE"
 PUBLIC_BASE_URL_KEY = "PUBLIC_BASE_URL"
 TEACHER_OPTIONS = [
     "Prof. Dr. Yalçın ATA",
@@ -61,17 +62,8 @@ def hash_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
-def load_env_values(path: Path = ENV_PATH) -> dict[str, str]:
-    """Basit .env dosyasini okur."""
-    if not path.exists():
-        return {}
-
+def _parse_env_lines(lines: list[str]) -> dict[str, str]:
     values: dict[str, str] = {}
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return {}
-
     for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -84,31 +76,57 @@ def load_env_values(path: Path = ENV_PATH) -> dict[str, str]:
     return values
 
 
-def get_teacher_code_hash() -> str:
-    """Ogretmen kod hash degerini secrets, ortam veya .env dosyasindan alir."""
+def load_env_values(path: Path | None = None) -> dict[str, str]:
+    """Basit .env dosyasini okur (script dizini + calisma dizini fallback)."""
+    if path is not None:
+        candidates = [path]
+    else:
+        app_dir_env = Path(__file__).resolve().parent / ".env"
+        candidates = [app_dir_env, ENV_PATH]
+
+    values: dict[str, str] = {}
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen or not candidate.exists():
+            continue
+        seen.add(resolved)
+        try:
+            file_values = _parse_env_lines(candidate.read_text(encoding="utf-8").splitlines())
+        except OSError:
+            continue
+        values.update(file_values)
+    return values
+
+
+def get_secret_or_env(key: str) -> str:
+    """Degeri secrets, ortam degiskeni veya .env dosyasindan alir."""
     try:
-        secret_value = str(st.secrets.get(TEACHER_CODE_HASH_KEY, "")).strip()
-    except Exception:
-        secret_value = ""
-    if secret_value:
-        return secret_value.lower()
-
-    env_file_values = load_env_values()
-    raw_value = os.getenv(TEACHER_CODE_HASH_KEY) or env_file_values.get(TEACHER_CODE_HASH_KEY, "")
-    return raw_value.strip().lower()
-
-
-def get_public_base_url() -> str:
-    """Public quiz URL degerini secrets, ortam veya .env dosyasindan alir."""
-    try:
-        secret_value = str(st.secrets.get(PUBLIC_BASE_URL_KEY, "")).strip()
+        secret_value = str(st.secrets.get(key, "")).strip()
     except Exception:
         secret_value = ""
     if secret_value:
         return secret_value
 
     env_file_values = load_env_values()
-    return str(os.getenv(PUBLIC_BASE_URL_KEY) or env_file_values.get(PUBLIC_BASE_URL_KEY, "")).strip()
+    return str(os.getenv(key) or env_file_values.get(key, "")).strip()
+
+
+def get_teacher_code_hash() -> str:
+    """Ogretmen kod hash degerini alir (hash veya duz metin koddan)."""
+    raw_hash = get_secret_or_env(TEACHER_CODE_HASH_KEY).lower()
+    if raw_hash:
+        return raw_hash
+
+    plain_code = get_secret_or_env(TEACHER_CODE_KEY)
+    if plain_code:
+        return hash_secret(plain_code.strip())
+    return ""
+
+
+def get_public_base_url() -> str:
+    """Public quiz URL degerini secrets, ortam veya .env dosyasindan alir."""
+    return get_secret_or_env(PUBLIC_BASE_URL_KEY)
 
 
 def is_teacher_code_configured() -> bool:
@@ -735,10 +753,11 @@ def teacher_view():
 
     if not is_teacher_code_configured():
         st.error("Secrets/.env ayari eksik: TEACHER_CODE_HASH tanimli degil veya gecersiz.")
-        st.code("TEACHER_CODE_HASH=<sha256_hex_degeri>", language="bash")
+        st.code("TEACHER_CODE_HASH=<sha256_hex_degeri>\n# veya\nTEACHER_CODE=<duz-metin-kod>", language="bash")
         st.caption(
             "Hash uretmek icin: python -c \"import hashlib; print(hashlib.sha256('yeni-kod'.encode()).hexdigest())\""
         )
+        st.caption("Streamlit Cloud'da bu degeri App Settings -> Secrets bolumune eklemelisiniz.")
         return
 
     selected_teacher = st.selectbox(
