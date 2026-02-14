@@ -20,7 +20,6 @@ import random
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
@@ -177,56 +176,109 @@ def time_basis_for_ui() -> str:
     return base
 
 
-def _sanitize_overlay_text(student_id: str) -> str:
-    """Overlay icin guvenli metin olusturur."""
-    cleaned = "".join(ch for ch in student_id.strip() if ch.isalnum() or ch in "-_.")
-    return cleaned[:32] if cleaned else "ID"
+class OcrShieldRng:
+    """Mulberry32 tabanli deterministik PRNG - Python surumu."""
+
+    def __init__(self, seed: int) -> None:
+        self._state = seed & 0xFFFFFFFF
+
+    def next(self) -> float:
+        """0-1 arasi float dondurur."""
+        self._state = (self._state + 0x6D2B79F5) & 0xFFFFFFFF
+        t = ((self._state ^ (self._state >> 15)) * (1 | self._state)) & 0xFFFFFFFF
+        t = (t + (((t ^ (t >> 7)) * (61 | t)) & 0xFFFFFFFF) ^ t) & 0xFFFFFFFF
+        return ((t ^ (t >> 14)) & 0xFFFFFFFF) / 4294967296.0
 
 
-def build_student_id_overlay_data_uri(student_id: str) -> str:
-    """Ogrenci numarasini 58 derece watermark SVG data URI'sine donusturur."""
-    token = html.escape(_sanitize_overlay_text(student_id))
-    svg = f"""
-<svg xmlns='http://www.w3.org/2000/svg' width='980' height='560' viewBox='0 0 980 560'>
-  <rect width='100%' height='100%' fill='transparent'/>
-  <g transform='rotate(58 490 280)'>
-    <text x='140' y='320'
-          font-family='monospace'
-          font-size='68'
-          font-weight='800'
-          letter-spacing='3'
-          fill='rgba(255, 82, 82, 0.27)'>{token}</text>
-    <text x='145' y='325'
-          font-family='monospace'
-          font-size='68'
-          font-weight='800'
-          letter-spacing='3'
-          fill='rgba(73, 229, 255, 0.25)'>{token}</text>
-    <text x='136' y='315'
-          font-family='monospace'
-          font-size='68'
-          font-weight='800'
-          letter-spacing='3'
-          fill='rgba(255, 221, 107, 0.24)'>{token}</text>
-  </g>
-</svg>
-""".strip()
-    return f"data:image/svg+xml;utf8,{quote(svg, safe='')}"
+# OCR bozucu renk paleti: birbirine yakin tonlar, insan rahat gorur ama
+# iki-renkli yarilama OCR karakter sinirlarini bozar.
+_OCR_COLORS = [
+    "#e8eaed", "#d4d8dd", "#c0c8d0", "#f0e6dc",
+    "#dce8f0", "#e0d8f0", "#f0dce0", "#d8f0dc",
+]
+
+
+def _compute_seed_from_id(student_id: str) -> int:
+    """Ogrenci numarasindan deterministik seed uretir."""
+    digest = hashlib.sha256(student_id.strip().encode("utf-8")).hexdigest()
+    return int(digest[:12], 16)
+
+
+def _ocr_shield_text(text: str, rng: OcrShieldRng) -> str:
+    """Duz metin stringini karakter-bazli OCR bozucu HTML'e donusturur.
+
+    Her karakter ayri bir <span> icine alinir. Ogrenci numarasindan turetilen
+    deterministik desene gore:
+    - ~40% karakterlerin ust yarisi bir renk, alt yarisi baska renk olur
+      (clip-path + absolute positioning ile)
+    - Tum karakterlere sub-pixel translate() kaymasi uygulanir
+    - Letter-spacing varyasyonu eklenir
+
+    Sonuc: insan rahat okur, OCR/VLM karakter sinirlarini cozemez.
+    """
+    parts: list[str] = []
+    for ch in text:
+        # Bosluk karakterlerini olduklari gibi birak
+        if ch in (" ", "\n", "\t", "\r"):
+            parts.append(ch)
+            continue
+
+        # HTML-guvenli karakter
+        safe_ch = html.escape(ch)
+
+        r1 = rng.next()
+        r2 = rng.next()
+        r3 = rng.next()
+        r4 = rng.next()
+        r5 = rng.next()
+
+        # ~40% olasilikla yarilama (split-color) uygula
+        if r1 < 0.40:
+            clip_pct = 40 + int(r2 * 20)  # %40-%60 arasi
+            c_idx1 = int(r4 * len(_OCR_COLORS)) % len(_OCR_COLORS)
+            c_idx2 = (c_idx1 + 1 + int(r5 * (len(_OCR_COLORS) - 1))) % len(_OCR_COLORS)
+            if r3 < 0.5:
+                top_color = _OCR_COLORS[c_idx1]
+                bot_color = _OCR_COLORS[c_idx2]
+            else:
+                top_color = _OCR_COLORS[c_idx2]
+                bot_color = _OCR_COLORS[c_idx1]
+
+            # Sub-pixel shift alt yariya
+            sx = f"{r1 * 0.8 - 0.4:.2f}"
+            sy = f"{r2 * 0.6 - 0.3:.2f}"
+
+            parts.append(
+                f'<span class="ocr-w">'
+                f'<span class="ocr-t" style="clip-path:inset(0 0 {100-clip_pct}% 0);color:{top_color}">{safe_ch}</span>'
+                f'<span class="ocr-b" style="clip-path:inset({clip_pct}% 0 0 0);color:{bot_color};'
+                f'transform:translate({sx}px,{sy}px)">{safe_ch}</span>'
+                f'</span>'
+            )
+        else:
+            # Yarilama yok: sub-pixel shift + letter-spacing varyasyonu
+            dx = f"{r2 * 0.6 - 0.3:.2f}"
+            dy = f"{r3 * 0.4 - 0.2:.2f}"
+            ls = f"{r4 * 0.4 - 0.2:.2f}"
+            style_parts = [f"letter-spacing:{ls}px"]
+            if abs(float(dx)) > 0.08 or abs(float(dy)) > 0.08:
+                style_parts.append(f"position:relative;transform:translate({dx}px,{dy}px)")
+            parts.append(f'<span class="ocr-g" style="{";".join(style_parts)}">{safe_ch}</span>')
+
+    return "".join(parts)
 
 
 def inject_student_id_overlay(student_id: str) -> None:
-    """Ogrenci numarasina bagli OCR zorlastirici overlay'i aktif eder."""
-    data_uri = build_student_id_overlay_data_uri(student_id)
-    st.markdown(
-        f"""
-        <style>
-        :root {{
-            --student-id-overlay: url("{data_uri}");
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    """Ogrenci numarasini session state'e kaydeder (render icin)."""
+    st.session_state["_ocr_student_id"] = student_id.strip()
+
+
+def _get_ocr_rng() -> OcrShieldRng | None:
+    """Aktif ogrenci numarasi varsa RNG dondurur."""
+    sid = st.session_state.get("_ocr_student_id", "")
+    if not sid:
+        return None
+    return OcrShieldRng(_compute_seed_from_id(sid))
 
 
 def is_teacher_code_configured() -> bool:
@@ -1017,11 +1069,19 @@ def teacher_view():
 
 
 def render_question_card(title: str, body: str, index: int):
+    rng = _get_ocr_rng()
+    if rng is not None:
+        rendered_title = _ocr_shield_text(f"Soru {index}: {title}", rng)
+        rendered_body = _ocr_shield_text(body, rng)
+    else:
+        rendered_title = f"Soru {index}: {html.escape(title)}"
+        rendered_body = html.escape(body)
+
     st.markdown(
         f"""
         <div class="q-card">
-            <div class="q-title">Soru {index}: {title}</div>
-            <div class="q-body">{body}</div>
+            <div class="q-title">{rendered_title}</div>
+            <div class="q-body">{rendered_body}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1040,7 +1100,6 @@ def inject_styles():
             --muted: #cbd5e1;
             --edge: rgba(255,255,255,0.12);
             --glass: rgba(255,255,255,0.07);
-            --student-id-overlay: none;
         }
         html, body, [class*="css"]  {
             font-family: 'Space Grotesk', sans-serif;
@@ -1081,94 +1140,27 @@ def inject_styles():
         [data-testid="stSidebar"] ::-webkit-scrollbar-track {
             background: rgba(255, 255, 255, 0.06);
         }
-        @keyframes ocr-luma-jitter {
-            0% {
-                background-position: 0 0, 0 0, 0 0, 0 0;
-            }
-            25% {
-                background-position: 0.8px -0.6px, -0.5px 0.7px, 1px 0.5px, -0.6px -0.8px;
-            }
-            50% {
-                background-position: -0.7px 0.5px, 0.6px -0.7px, -0.8px 0.4px, 0.7px -0.6px;
-            }
-            75% {
-                background-position: 0.6px 0.7px, -0.7px -0.5px, 0.5px -0.9px, -0.5px 0.8px;
-            }
-            100% {
-                background-position: 0 0, 0 0, 0 0, 0 0;
-            }
+        /* OCR bozucu: karakter-seviyesinde clip-path + renk kaymasi */
+        .ocr-w {
+            display: inline-block;
+            position: relative;
+            user-select: text;
         }
-        @keyframes ocr-line-jitter {
-            0% {
-                transform: translate3d(0, 0, 0);
-            }
-            33% {
-                transform: translate3d(0.5px, -0.3px, 0);
-            }
-            66% {
-                transform: translate3d(-0.4px, 0.4px, 0);
-            }
-            100% {
-                transform: translate3d(0, 0, 0);
-            }
+        .ocr-t {
+            display: inline;
+            user-select: text;
         }
-        [data-testid="stAppViewContainer"]::before {
-            content: "";
-            position: fixed;
-            inset: 0;
+        .ocr-b {
+            display: inline;
+            position: absolute;
+            left: 0;
+            top: 0;
             pointer-events: none;
-            z-index: 2147482999;
-            mix-blend-mode: soft-light;
-            opacity: 0.32;
-            background-image:
-                repeating-linear-gradient(
-                    0deg,
-                    rgba(255, 255, 255, 0.050) 0px,
-                    rgba(255, 255, 255, 0.050) 1px,
-                    rgba(255, 255, 255, 0.0) 1px,
-                    rgba(255, 255, 255, 0.0) 6px
-                ),
-                repeating-linear-gradient(
-                    90deg,
-                    rgba(0, 0, 0, 0.050) 0px,
-                    rgba(0, 0, 0, 0.050) 1px,
-                    rgba(0, 0, 0, 0.0) 1px,
-                    rgba(0, 0, 0, 0.0) 6px
-                ),
-                radial-gradient(circle at 23% 27%, rgba(255, 255, 255, 0.080) 1px, rgba(255, 255, 255, 0.0) 2px),
-                radial-gradient(circle at 74% 72%, rgba(0, 0, 0, 0.080) 1px, rgba(0, 0, 0, 0.0) 2px);
-            background-size: 6px 6px, 6px 6px, 14px 14px, 16px 16px;
-            animation: ocr-luma-jitter 1.15s steps(3, end) infinite;
-            will-change: background-position;
+            user-select: none;
         }
-        [data-testid="stAppViewContainer"]::after {
-            content: "";
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            z-index: 2147483000;
-            mix-blend-mode: normal;
-            background-image:
-                var(--student-id-overlay),
-                repeating-linear-gradient(
-                    20deg,
-                    rgba(255, 255, 255, 0.20) 0px,
-                    rgba(255, 255, 255, 0.20) 2px,
-                    rgba(255, 255, 255, 0.0) 2px,
-                    rgba(255, 255, 255, 0.0) 16px
-                ),
-                repeating-linear-gradient(
-                    -20deg,
-                    rgba(4, 10, 28, 0.16) 0px,
-                    rgba(4, 10, 28, 0.16) 2px,
-                    rgba(4, 10, 28, 0.0) 2px,
-                    rgba(4, 10, 28, 0.0) 19px
-                );
-            background-size: 980px 560px, 16px 16px, 19px 19px;
-            background-repeat: repeat, repeat, repeat;
-            opacity: 1;
-            animation: ocr-line-jitter 1.6s steps(2, end) infinite;
-            will-change: transform;
+        .ocr-g {
+            display: inline;
+            user-select: text;
         }
         .q-card {
             background: linear-gradient(140deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03));
