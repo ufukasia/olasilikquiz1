@@ -1515,15 +1515,6 @@ def main():
             st.error("Bu oturum icin kaydiniz zaten alinmis.")
             st.stop()
 
-        missing_explanations = [
-            str(i) for i, ans in enumerate(answers, start=1) if non_empty_line_count(ans.get("explanation", "")) < 2
-        ]
-        if missing_explanations:
-            st.error(
-                "Her soru icin en az 2 satir cozum aciklamasi giriniz. "
-                f"Eksik sorular: {', '.join(missing_explanations)}"
-            )
-            st.stop()
 
         scored: list[dict[str, Any]] = []
         score = 0
