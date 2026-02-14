@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import hmac
 import hashlib
+import html
 import json
 import math
 import os
@@ -19,6 +20,7 @@ import random
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
@@ -173,6 +175,58 @@ def time_basis_for_ui() -> str:
     if invalid_requested:
         return f"{base} | APP_TIMEZONE gecersiz: {invalid_requested}"
     return base
+
+
+def _sanitize_overlay_text(student_id: str) -> str:
+    """Overlay icin guvenli metin olusturur."""
+    cleaned = "".join(ch for ch in student_id.strip() if ch.isalnum() or ch in "-_.")
+    return cleaned[:32] if cleaned else "ID"
+
+
+def build_student_id_overlay_data_uri(student_id: str) -> str:
+    """Ogrenci numarasini 58 derece watermark SVG data URI'sine donusturur."""
+    token = html.escape(_sanitize_overlay_text(student_id))
+    svg = f"""
+<svg xmlns='http://www.w3.org/2000/svg' width='560' height='300' viewBox='0 0 560 300'>
+  <rect width='100%' height='100%' fill='transparent'/>
+  <g transform='rotate(58 280 150)'>
+    <text x='-180' y='188'
+          font-family='monospace'
+          font-size='44'
+          font-weight='700'
+          letter-spacing='3'
+          fill='rgba(255, 82, 82, 0.22)'>{token}</text>
+    <text x='-176' y='192'
+          font-family='monospace'
+          font-size='44'
+          font-weight='700'
+          letter-spacing='3'
+          fill='rgba(73, 229, 255, 0.20)'>{token}</text>
+    <text x='-184' y='184'
+          font-family='monospace'
+          font-size='44'
+          font-weight='700'
+          letter-spacing='3'
+          fill='rgba(255, 221, 107, 0.19)'>{token}</text>
+  </g>
+</svg>
+""".strip()
+    return f"data:image/svg+xml;utf8,{quote(svg, safe='')}"
+
+
+def inject_student_id_overlay(student_id: str) -> None:
+    """Ogrenci numarasina bagli OCR zorlastirici overlay'i aktif eder."""
+    data_uri = build_student_id_overlay_data_uri(student_id)
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --student-id-overlay: url("{data_uri}");
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def is_teacher_code_configured() -> bool:
@@ -986,6 +1040,7 @@ def inject_styles():
             --muted: #cbd5e1;
             --edge: rgba(255,255,255,0.12);
             --glass: rgba(255,255,255,0.07);
+            --student-id-overlay: none;
         }
         html, body, [class*="css"]  {
             font-family: 'Space Grotesk', sans-serif;
@@ -1092,8 +1147,9 @@ def inject_styles():
             inset: 0;
             pointer-events: none;
             z-index: 2147483000;
-            mix-blend-mode: soft-light;
+            mix-blend-mode: normal;
             background-image:
+                var(--student-id-overlay),
                 repeating-linear-gradient(
                     20deg,
                     rgba(255, 255, 255, 0.12) 0px,
@@ -1108,6 +1164,9 @@ def inject_styles():
                     rgba(4, 10, 28, 0.0) 1px,
                     rgba(4, 10, 28, 0.0) 9px
                 );
+            background-size: 560px 300px, 8px 8px, 9px 9px;
+            background-repeat: repeat, repeat, repeat;
+            opacity: 0.95;
             animation: ocr-line-jitter 1.6s steps(2, end) infinite;
             will-change: transform;
         }
@@ -1173,6 +1232,8 @@ def main():
     student_name_clean = student_name.strip()
     student_id_clean = student_id.strip()
     teacher_name_clean = teacher_name.strip()
+    if student_id_clean:
+        inject_student_id_overlay(student_id_clean)
 
     if not student_name_clean or not student_id_clean:
         st.info("Lutfen ad soyad ve ogrenci numarasi giriniz.")
