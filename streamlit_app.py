@@ -267,53 +267,50 @@ def _ocr_shield_text(text: str, rng: OcrShieldRng) -> str:
     return "".join(parts)
 
 
-def _ocr_shield_words(char_html: str, raw_text: str, rng: OcrShieldRng) -> str:
-    """KATMAN 2 - Kelime bazinda OCR bozucu.
+def _ocr_shield_full(text: str, rng: OcrShieldRng) -> str:
+    """Tam OCR kalkan pipeline: harf + kelime bazinda tahribat.
 
-    Harf-bazli isle gelmis HTML'i kelimelere gore gruplar ve:
-    - Hafif rotation (0.3-1.5 derece) uygular
-    - Kucuk dikey offset ekler  
-    - Kelimeler arasina sifir-genislikli Unicode karakterler serpistirir
-    - Kelime gruplarina hafif font-size varyasyonu verir
+    Islem sirasi:
+    1. Metin boslukla kelimelere bolunur
+    2. Her kelimeye _ocr_shield_text (harf bazli) uygulanir
+    3. Kelimeler 1-3'lu gruplara alinir
+    4. Her gruba rotation, dikey kayma, font-size varyasyonu uygulanir
+    5. Gruplar arasi sifir-genislikli Unicode karakterler eklenir
 
-    Bu katman OCR'in satir/kelime segmentasyonunu bozar.
+    Bu sira sayesinde HTML etiketleri hic bozulmaz.
     """
-    # raw_text'i bosluga gore ayirarak her kelimenin indekslerini bul
-    # char_html icindeki karsiliklari etiketlere bakarak bolmek yerine
-    # daha guvenilir bir yol: raw_text'in bosluk pozisyonlarini tespit et
-    # ve char_html'i o pozisyonlarda bol
-    word_segments = raw_text.split(" ")
-    html_segments: list[str] = []
+    words = text.split(" ")
+    # Her kelimeye harf bazli tahribat uygula
+    word_htmls: list[str] = []
+    for w in words:
+        if not w:
+            word_htmls.append("")
+            continue
+        word_htmls.append(_ocr_shield_text(w, rng))
 
-    # Her kelime icin basit yaklaşim: kelimenin her karakterini
-    # ocr-g/ocr-w span olarak islenmis HTML'den cikar
-    # Ama bu zor, bunun yerine tum char_html'i bosluktan boluyoruz
-    # char_html'de bosluklar " " olarak kaldigindan split islemi calisir
-    raw_parts = char_html.split(" ")
-
+    # Kelime gruplarini olustur ve kelime-bazli efektler ekle
     result_parts: list[str] = []
     i = 0
-    while i < len(raw_parts):
-        # 1-3 kelimelik gruplar olustur
+    while i < len(word_htmls):
         group_size = 1 + int(rng.next() * 3)  # 1, 2 veya 3
-        group_size = min(group_size, len(raw_parts) - i)
-        group_html = " ".join(raw_parts[i:i+group_size])
+        group_size = min(group_size, len(word_htmls) - i)
+        group_html = " ".join(word_htmls[i:i + group_size])
 
         r1 = rng.next()
         r2 = rng.next()
         r3 = rng.next()
         r4 = rng.next()
 
-        # Rotation: +/- 0.3 ile 1.5 derece arasi
-        angle = (r1 * 2.0 - 1.0) * 1.2  # -1.2 ile +1.2 derece
+        # Rotation: +/- 0.3 ile 1.2 derece arasi
+        angle = (r1 * 2.0 - 1.0) * 1.2
         if abs(angle) < 0.3:
             angle = 0.3 if angle >= 0 else -0.3
 
-        # Dikey offset: +/- 0.5-1.5px
-        dy = (r2 * 2.0 - 1.0) * 1.0  # -1 ile +1 px
+        # Dikey offset: +/- 1px
+        dy = (r2 * 2.0 - 1.0) * 1.0
 
         # Font-size varyasyonu: %97-%103
-        fs_pct = 97 + r3 * 6  # 97-103%
+        fs_pct = 97 + r3 * 6
 
         style = (
             f"display:inline-block;"
@@ -322,14 +319,12 @@ def _ocr_shield_words(char_html: str, raw_text: str, rng: OcrShieldRng) -> str:
             f"transform-origin:center center"
         )
 
-        # Sifir-genislikli karakter ekle (kelime gruplari arasina)
         zw_idx = int(r4 * len(_ZWCHARS)) % len(_ZWCHARS)
         zw_char = _ZWCHARS[zw_idx]
 
         result_parts.append(f'<span class="ocr-wg" style="{style}">{group_html}</span>')
 
-        # Son grup degilse, bosluk + sifir-genislikli karakter ekle
-        if i + group_size < len(raw_parts):
+        if i + group_size < len(word_htmls):
             result_parts.append(f" {zw_char}")
 
         i += group_size
@@ -1140,14 +1135,8 @@ def teacher_view():
 def render_question_card(title: str, body: str, index: int):
     rng = _get_ocr_rng()
     if rng is not None:
-        raw_title = f"Soru {index}: {title}"
-        raw_body = body
-        # Katman 1: harf bazinda tahribat
-        char_title = _ocr_shield_text(raw_title, rng)
-        char_body = _ocr_shield_text(raw_body, rng)
-        # Katman 2: kelime bazinda tahribat
-        rendered_title = _ocr_shield_words(char_title, raw_title, rng)
-        rendered_body = _ocr_shield_words(char_body, raw_body, rng)
+        rendered_title = _ocr_shield_full(f"Soru {index}: {title}", rng)
+        rendered_body = _ocr_shield_full(body, rng)
     else:
         rendered_title = f"Soru {index}: {html.escape(title)}"
         rendered_body = html.escape(body)
