@@ -190,11 +190,12 @@ class OcrShieldRng:
         return ((t ^ (t >> 14)) & 0xFFFFFFFF) / 4294967296.0
 
 
-# OCR bozucu renk paleti: koyu arka plan uzerinde okunabilir ama
-# birbirinden farkli iki grup. Yarilanan harfin ust/alt yarisi
-# farkli gruptan renk alir -> OCR karakter sinirini cozemez.
-_OCR_WARM = ["#f8e8d8", "#f5dcc8", "#fce4d0", "#f0d8c0"]   # sicak beyaz tonlari
-_OCR_COOL = ["#d0e8f8", "#c8ddf5", "#d0e4fc", "#c0d8f0"]   # soguk beyaz tonlari
+# OCR bozucu renk paleti: koyu arka plan uzerinde okunabilir,
+# birbirinden BELIRGIN sekilde farkli iki grup.
+# Yarilanan harfin ust/alt yarisi farkli gruptan renk alir
+# -> OCR karakter sinirini cozemez.
+_OCR_WARM = ["#ff9e6c", "#ffb347", "#ff7eb3", "#ffa07a", "#f0c040"]  # turuncu/pembe/sari
+_OCR_COOL = ["#6cc4ff", "#47d1b3", "#7eb3ff", "#40e0d0", "#8be0ff"]  # mavi/yesil/camgobegi
 
 # Sifir-genislikli Unicode karakterler: gorunmez ama OCR metin
 # segmentasyonunu bozar.
