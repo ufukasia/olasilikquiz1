@@ -10,6 +10,7 @@ Streamlit tabanli, ogrenci numarasina gore kisilestirilmis 5 soruluk quiz.
 from __future__ import annotations
 
 import io
+import base64
 import hmac
 import hashlib
 import html
@@ -1186,9 +1187,113 @@ def teacher_view():
 
     if filtered.empty:
         st.info("Eslesen kayit bulunamadi.")
+    if session_df.empty:
+        st.info("Secilen oturumda kayit yok.")
         return
 
-    st.dataframe(filtered.sort_values("timestamp", ascending=False), width="stretch")
+    if "student_id" in session_df.columns:
+        participants = session_df["student_id"].astype(str).str.strip().replace("", pd.NA).dropna().nunique()
+    else:
+        participants = len(session_df)
+
+    score_series = pd.to_numeric(session_df.get("score"), errors="coerce").dropna()
+    avg_score = f"{score_series.mean():.1f}" if not score_series.empty else "-"
+    max_score = f"{score_series.max():.1f}" if not score_series.empty else "-"
+    min_score = f"{score_series.min():.1f}" if not score_series.empty else "-"
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Katilan", int(participants))
+    m2.metric("Ortalama", avg_score)
+    m3.metric("En Yuksek", max_score)
+    m4.metric("En Dusuk", min_score)
+
+    visible_cols = ["timestamp", "student_id", "student_name", "teacher_name", "score"]
+    existing_cols = [col for col in visible_cols if col in session_df.columns]
+    if existing_cols:
+        st.dataframe(session_df.sort_values("timestamp", ascending=False)[existing_cols], width="stretch")
+
+
+
+def _generate_bg_svg(rng: OcrShieldRng, width: int = 600, height: int = 200) -> str:
+    """K8: Arka plan SVG gurultusu.
+
+    Soru kartinin background'una uygulanan deterministik SVG:
+    - Rastgele noktalar (farkli boyut ve renk)
+    - Ince cizgiler (farkli aci ve renk)
+    - Sahte (yanlis) sayilar dusuk opasitede
+    """
+    elements: list[str] = []
+
+    # Rastgele noktalar (15-25 adet)
+    dot_count = 15 + int(rng.next() * 10)
+    dot_colors = ["#ff9e6c", "#6cc4ff", "#ffb347", "#47d1b3", "#ff7eb3", "#40e0d0"]
+    for _ in range(dot_count):
+        cx = int(rng.next() * width)
+        cy = int(rng.next() * height)
+        r = 1 + rng.next() * 3
+        color = dot_colors[int(rng.next() * len(dot_colors)) % len(dot_colors)]
+        opacity = f"{0.04 + rng.next() * 0.06:.2f}"
+        elements.append(
+            f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" '
+            f'fill="{color}" opacity="{opacity}"/>'
+        )
+
+    # Ince cizgiler (5-8 adet)
+    line_count = 5 + int(rng.next() * 3)
+    for _ in range(line_count):
+        x1 = int(rng.next() * width)
+        y1 = int(rng.next() * height)
+        x2 = int(rng.next() * width)
+        y2 = int(rng.next() * height)
+        color = dot_colors[int(rng.next() * len(dot_colors)) % len(dot_colors)]
+        opacity = f"{0.03 + rng.next() * 0.04:.2f}"
+        elements.append(
+            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
+            f'stroke="{color}" stroke-width="0.5" opacity="{opacity}"/>'
+        )
+
+    # Sahte sayilar (8-12 adet) - VLM bunlari gercek degerlerle karistirir
+    fake_count = 8 + int(rng.next() * 4)
+    for _ in range(fake_count):
+        fx = int(rng.next() * (width - 40))
+        fy = 10 + int(rng.next() * (height - 15))
+        fake_val = f"{rng.next():.2f}"
+        font_size = 8 + int(rng.next() * 6)
+        color = dot_colors[int(rng.next() * len(dot_colors)) % len(dot_colors)]
+        opacity = f"{0.04 + rng.next() * 0.06:.2f}"
+        angle = int((rng.next() * 2 - 1) * 15)
+        elements.append(
+            f'<text x="{fx}" y="{fy}" font-size="{font_size}" '
+            f'fill="{color}" opacity="{opacity}" '
+            f'transform="rotate({angle},{fx},{fy})">{fake_val}</text>'
+        )
+
+    # Sahte P(...) ifadeleri (3-5 adet) - olasilik sorusu gibi gorunur
+    expr_count = 3 + int(rng.next() * 2)
+    expr_templates = ["P(A)", "P(B)", "P(A∩B)", "P(A|B)", "P(B|A)", "P(A∪B)"]
+    for _ in range(expr_count):
+        fx = int(rng.next() * (width - 60))
+        fy = 10 + int(rng.next() * (height - 15))
+        expr = expr_templates[int(rng.next() * len(expr_templates)) % len(expr_templates)]
+        fake_val = f"{rng.next():.2f}"
+        label = f"{expr}={fake_val}"
+        font_size = 7 + int(rng.next() * 4)
+        color = dot_colors[int(rng.next() * len(dot_colors)) % len(dot_colors)]
+        opacity = f"{0.03 + rng.next() * 0.05:.2f}"
+        angle = int((rng.next() * 2 - 1) * 10)
+        elements.append(
+            f'<text x="{fx}" y="{fy}" font-size="{font_size}" '
+            f'fill="{color}" opacity="{opacity}" '
+            f'transform="rotate({angle},{fx},{fy})">{html.escape(label)}</text>'
+        )
+
+    svg_content = "\n".join(elements)
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">'
+        f'{svg_content}</svg>'
+    )
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return f"url('data:image/svg+xml;base64,{b64}')"
 
 
 def render_question_card(title: str, body: str, index: int):
@@ -1202,13 +1307,19 @@ def render_question_card(title: str, body: str, index: int):
     if rng is not None:
         rendered_title = _ocr_shield_full(f"Soru {index}: {title}", rng)
         rendered_body = _ocr_shield_full(body, rng)
+        bg_svg = _generate_bg_svg(rng)
+        card_style = (
+            f"background-image:{bg_svg};"
+            f"background-size:cover;background-repeat:no-repeat;"
+        )
     else:
         rendered_title = f"Soru {index}: {html.escape(title)}"
         rendered_body = html.escape(body)
+        card_style = ""
 
     st.markdown(
         f"""
-        <div class="q-card">
+        <div class="q-card" style="{card_style}">
             <div class="q-title">{rendered_title}</div>
             <div class="q-body">{rendered_body}</div>
         </div>
@@ -1269,16 +1380,14 @@ def inject_styles():
         [data-testid="stSidebar"] ::-webkit-scrollbar-track {
             background: rgba(255, 255, 255, 0.06);
         }
-        /* ==== OCR/VLM Kalkan Stilleri (K1-K7) ==== */
+        /* ==== OCR/VLM Kalkan Stilleri (K1-K8) ==== */
         .ocr-w { display:inline-block; position:relative; user-select:text; line-height:1; }
         .ocr-t { display:inline-block; user-select:text; }
         .ocr-b { display:inline-block; position:absolute; left:0; top:0; width:100%; pointer-events:none; user-select:none; }
         .ocr-g { display:inline; user-select:text; }
         .ocr-wg { display:inline-block; user-select:text; vertical-align:baseline; }
-        /* K3: Hayalet karakter */
         .ocr-cw { display:inline-block; position:relative; }
         .ocr-ghost { position:absolute; left:0; top:0; pointer-events:none; user-select:none; filter:blur(0.3px); color:rgba(255,255,255,0.9); }
-        /* K4: Phantom sayilar */
         .ocr-nw { display:inline-block; position:relative; }
         .ocr-phantom { position:absolute; left:0; top:0; white-space:nowrap; pointer-events:none; user-select:none; color:rgba(255,255,255,1); filter:blur(0.5px); }
         /* Soru kartlari */
@@ -1292,7 +1401,6 @@ def inject_styles():
             position: relative;
             overflow: hidden;
         }
-        /* K7: CSS gorsel gurultu - crosshatch pattern */
         .q-card::after {
             content: '';
             position: absolute;
@@ -1311,7 +1419,6 @@ def inject_styles():
             margin-bottom: 6px;
             position: relative; z-index: 2;
         }
-        /* K7: text-shadow gorsel gurultu - OCR edge detection bozar */
         .q-body {
             color: var(--ink);
             line-height: 1.55;
