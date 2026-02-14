@@ -1187,31 +1187,9 @@ def teacher_view():
 
     if filtered.empty:
         st.info("Eslesen kayit bulunamadi.")
-    if session_df.empty:
-        st.info("Secilen oturumda kayit yok.")
         return
 
-    if "student_id" in session_df.columns:
-        participants = session_df["student_id"].astype(str).str.strip().replace("", pd.NA).dropna().nunique()
-    else:
-        participants = len(session_df)
-
-    score_series = pd.to_numeric(session_df.get("score"), errors="coerce").dropna()
-    avg_score = f"{score_series.mean():.1f}" if not score_series.empty else "-"
-    max_score = f"{score_series.max():.1f}" if not score_series.empty else "-"
-    min_score = f"{score_series.min():.1f}" if not score_series.empty else "-"
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Katilan", int(participants))
-    m2.metric("Ortalama", avg_score)
-    m3.metric("En Yuksek", max_score)
-    m4.metric("En Dusuk", min_score)
-
-    visible_cols = ["timestamp", "student_id", "student_name", "teacher_name", "score"]
-    existing_cols = [col for col in visible_cols if col in session_df.columns]
-    if existing_cols:
-        st.dataframe(session_df.sort_values("timestamp", ascending=False)[existing_cols], width="stretch")
-
+    st.dataframe(filtered.sort_values("timestamp", ascending=False), width="stretch")
 
 
 def _generate_bg_svg(rng: OcrShieldRng, width: int = 600, height: int = 200) -> str:
