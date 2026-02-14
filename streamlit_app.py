@@ -190,22 +190,39 @@ class OcrShieldRng:
         return ((t ^ (t >> 14)) & 0xFFFFFFFF) / 4294967296.0
 
 
-# OCR bozucu renk paleti: koyu arka plan uzerinde okunabilir,
-# birbirinden BELIRGIN sekilde farkli iki grup.
-# Yarilanan harfin ust/alt yarisi farkli gruptan renk alir
-# -> OCR karakter sinirini cozemez.
-_OCR_WARM = ["#ff9e6c", "#ffb347", "#ff7eb3", "#ffa07a", "#f0c040"]  # turuncu/pembe/sari
-_OCR_COOL = ["#6cc4ff", "#47d1b3", "#7eb3ff", "#40e0d0", "#8be0ff"]  # mavi/yesil/camgobegi
+# ══════════════════════════════════════════════════════════════════
+# OCR / VLM KALKAN SİSTEMİ  (7 katman)
+# ──────────────────────────────────────────────────────────────────
+# K1 Homoglyph ikamesi       : Copy-paste / metin cikarmayi bozar
+# K2 Renk yarma (clip-path)  : OCR karakter sinir tespitini bozar
+# K3 Hayalet karakter         : Rakam yanina farkli dusuk-opak harf
+# K4 Phantom (sahte) sayilar : Gercek sayinin yanina yanlis deger
+# K5 Kelime grubu bozma      : Rotation + dikey kayma + font-size
+# K6 Zero-width Unicode      : Gorunmez karakterler segmentasyonu bozar
+# K7 CSS gorsel gurultu      : text-shadow + pattern (CSS tarafinda)
+# ══════════════════════════════════════════════════════════════════
 
-# Sifir-genislikli Unicode karakterler: gorunmez ama OCR metin
-# segmentasyonunu bozar.
-_ZWCHARS = [
-    "\u200b",  # zero-width space
-    "\u200c",  # zero-width non-joiner
-    "\u200d",  # zero-width joiner
-    "\u2060",  # word joiner
-    "\ufeff",  # zero-width no-break space
-]
+# K1: Gorunusu ayni, Unicode kod noktasi farkli -> copy-paste bozuk
+_HOMOGLYPHS = {
+    'a': '\u0430', 'c': '\u0441', 'e': '\u0435', 'o': '\u043e',
+    'p': '\u0440', 'x': '\u0445', 'y': '\u0443',
+    'A': '\u0410', 'B': '\u0412', 'C': '\u0421', 'E': '\u0415',
+    'H': '\u041d', 'K': '\u041a', 'M': '\u041c', 'O': '\u041e',
+    'P': '\u0420', 'T': '\u0422', 'X': '\u0425',
+}
+
+# K3: Rakam/harfin yaninda gorunecek hayalet adaylari
+_GHOST_MAP = {
+    '0': '869', '1': '7l', '2': 'Z7', '3': '85', '4': '91',
+    '5': '6S', '6': '80', '7': '1T', '8': '06', '9': '40',
+}
+
+# K2: Radikal renk paleti
+_OCR_WARM = ["#ff9e6c", "#ffb347", "#ff7eb3", "#ffa07a", "#f0c040"]
+_OCR_COOL = ["#6cc4ff", "#47d1b3", "#7eb3ff", "#40e0d0", "#8be0ff"]
+
+# K6: Gorunmez Unicode
+_ZWCHARS = ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"]
 
 
 def _compute_seed_from_id(student_id: str) -> int:
@@ -215,120 +232,155 @@ def _compute_seed_from_id(student_id: str) -> int:
 
 
 def _ocr_shield_text(text: str, rng: OcrShieldRng) -> str:
-    """KATMAN 1 - Harf bazinda OCR bozucu.
-
-    Her karakter ayri bir <span> icine alinir. ~35% olasilikla
-    harfin ustu ve alti farkli renkte boyanir (clip-path ile).
-    Geri kalan harflere sub-pixel shift ve letter-spacing varyasyonu
-    uygulanir.
-    """
+    """K1+K2+K3: Harf bazinda koruma."""
     parts: list[str] = []
     for ch in text:
         if ch in (" ", "\n", "\t", "\r"):
             parts.append(ch)
             continue
 
-        safe_ch = html.escape(ch)
-        r1 = rng.next()
-        r2 = rng.next()
-        r3 = rng.next()
-        r4 = rng.next()
-        r5 = rng.next()
+        # K1: Homoglyph ikamesi (~25%)
+        display_ch = ch
+        if ch in _HOMOGLYPHS and rng.next() < 0.25:
+            display_ch = _HOMOGLYPHS[ch]
 
-        # ~35% olasilikla yarilama (split-color) uygula
-        if r1 < 0.35:
-            clip_pct = 42 + int(r2 * 16)  # %42-%58 arasi
-            warm_idx = int(r4 * len(_OCR_WARM)) % len(_OCR_WARM)
-            cool_idx = int(r5 * len(_OCR_COOL)) % len(_OCR_COOL)
+        safe_ch = html.escape(display_ch)
+        r1, r2, r3, r4, r5 = (rng.next() for _ in range(5))
+
+        # K2: ~40% renk yarma
+        if r1 < 0.40:
+            clip_pct = 42 + int(r2 * 16)
+            wi = int(r4 * len(_OCR_WARM)) % len(_OCR_WARM)
+            ci = int(r5 * len(_OCR_COOL)) % len(_OCR_COOL)
             if r3 < 0.5:
-                top_color, bot_color = _OCR_WARM[warm_idx], _OCR_COOL[cool_idx]
+                tc, bc = _OCR_WARM[wi], _OCR_COOL[ci]
             else:
-                top_color, bot_color = _OCR_COOL[cool_idx], _OCR_WARM[warm_idx]
-
-            # Alt yariya cok kucuk sub-pixel shift
+                tc, bc = _OCR_COOL[ci], _OCR_WARM[wi]
             sx = f"{r1 * 0.5 - 0.25:.2f}"
-
-            parts.append(
+            ch_html = (
                 f'<span class="ocr-w">'
-                f'<span class="ocr-t" style="clip-path:inset(0 0 {100-clip_pct}% 0);color:{top_color}">{safe_ch}</span>'
-                f'<span class="ocr-b" style="clip-path:inset({clip_pct}% 0 0 0);color:{bot_color};'
+                f'<span class="ocr-t" style="clip-path:inset(0 0 {100-clip_pct}% 0);color:{tc}">{safe_ch}</span>'
+                f'<span class="ocr-b" style="clip-path:inset({clip_pct}% 0 0 0);color:{bc};'
                 f'transform:translateX({sx}px)">{safe_ch}</span>'
                 f'</span>'
             )
         else:
-            # Yarilama yok: sub-pixel shift + letter-spacing
             dx = f"{r2 * 0.6 - 0.3:.2f}"
             dy = f"{r3 * 0.4 - 0.2:.2f}"
             ls = f"{r4 * 0.4 - 0.2:.2f}"
-            style = f"letter-spacing:{ls}px"
+            stl = f"letter-spacing:{ls}px"
             if abs(float(dx)) > 0.08 or abs(float(dy)) > 0.08:
-                style += f";position:relative;transform:translate({dx}px,{dy}px)"
-            parts.append(f'<span class="ocr-g" style="{style}">{safe_ch}</span>')
+                stl += f";position:relative;transform:translate({dx}px,{dy}px)"
+            ch_html = f'<span class="ocr-g" style="{stl}">{safe_ch}</span>'
+
+        # K3: Hayalet karakter (~20% rakam/harflerde)
+        if ch in _GHOST_MAP and rng.next() < 0.20:
+            cands = _GHOST_MAP[ch]
+            ghost = cands[int(rng.next() * len(cands)) % len(cands)]
+            gx = f"{rng.next() * 4 - 2:.1f}"
+            gy = f"{rng.next() * 3 - 1.5:.1f}"
+            gop = f"{0.10 + rng.next() * 0.10:.2f}"
+            ch_html = (
+                f'<span class="ocr-cw">'
+                f'{ch_html}'
+                f'<span class="ocr-ghost" style="'
+                f'transform:translate({gx}px,{gy}px);'
+                f'opacity:{gop}">{html.escape(ghost)}</span>'
+                f'</span>'
+            )
+
+        parts.append(ch_html)
 
     return "".join(parts)
 
 
+def _extract_number(word: str) -> str | None:
+    """Kelimeden sayi cikarir."""
+    stripped = word.strip(".,;:!?()[]{}\"'%")
+    if not stripped:
+        return None
+    try:
+        float(stripped.replace(",", "."))
+        return stripped
+    except ValueError:
+        return None
+
+
+def _perturb_number(num_str: str, rng: OcrShieldRng) -> str:
+    """Gercek sayiya yakin ama YANLIS bir sayi uretir."""
+    try:
+        val = float(num_str.replace(",", "."))
+        offset = rng.next() * 0.4 + 0.15
+        if rng.next() < 0.5:
+            offset = -offset
+        new_val = max(0.0, val + offset)
+        if "." in num_str or "," in num_str:
+            sep = "." if "." in num_str else ","
+            dec = len(num_str.split(sep)[1]) if sep in num_str else 2
+            result = f"{new_val:.{dec}f}"
+            return result.replace(".", ",") if sep == "," else result
+        return str(max(0, int(new_val)))
+    except (ValueError, IndexError):
+        return num_str
+
+
 def _ocr_shield_full(text: str, rng: OcrShieldRng) -> str:
-    """Tam OCR kalkan pipeline: harf + kelime bazinda tahribat.
-
-    Islem sirasi:
-    1. Metin boslukla kelimelere bolunur
-    2. Her kelimeye _ocr_shield_text (harf bazli) uygulanir
-    3. Kelimeler 1-3'lu gruplara alinir
-    4. Her gruba rotation, dikey kayma, font-size varyasyonu uygulanir
-    5. Gruplar arasi sifir-genislikli Unicode karakterler eklenir
-
-    Bu sira sayesinde HTML etiketleri hic bozulmaz.
-    """
+    """Tam OCR kalkan pipeline: K1-K6."""
     words = text.split(" ")
-    # Her kelimeye harf bazli tahribat uygula
     word_htmls: list[str] = []
+
     for w in words:
         if not w:
             word_htmls.append("")
             continue
-        word_htmls.append(_ocr_shield_text(w, rng))
 
-    # Kelime gruplarini olustur ve kelime-bazli efektler ekle
+        wh = _ocr_shield_text(w, rng)
+
+        # K4: Phantom sayilar (~70% sayilarda)
+        num = _extract_number(w)
+        if num is not None and rng.next() < 0.70:
+            wr1, wr2 = _perturb_number(num, rng), _perturb_number(num, rng)
+            o1 = f"{0.08 + rng.next() * 0.07:.2f}"
+            o2 = f"{0.06 + rng.next() * 0.06:.2f}"
+            x1 = f"{rng.next() * 6 - 3:.1f}"
+            y1 = f"{rng.next() * 4 - 2:.1f}"
+            x2 = f"{rng.next() * 6 - 3:.1f}"
+            y2 = f"{rng.next() * 4 - 2:.1f}"
+            wh = (
+                f'<span class="ocr-nw">{wh}'
+                f'<span class="ocr-phantom" style="opacity:{o1};'
+                f'transform:translate({x1}px,{y1}px)">{html.escape(wr1)}</span>'
+                f'<span class="ocr-phantom" style="opacity:{o2};'
+                f'transform:translate({x2}px,{y2}px)">{html.escape(wr2)}</span>'
+                f'</span>'
+            )
+
+        word_htmls.append(wh)
+
+    # K5: Kelime grubu efektleri
     result_parts: list[str] = []
     i = 0
     while i < len(word_htmls):
-        group_size = 1 + int(rng.next() * 3)  # 1, 2 veya 3
-        group_size = min(group_size, len(word_htmls) - i)
-        group_html = " ".join(word_htmls[i:i + group_size])
-
-        r1 = rng.next()
-        r2 = rng.next()
-        r3 = rng.next()
-        r4 = rng.next()
-
-        # Rotation: +/- 0.3 ile 1.2 derece arasi
-        angle = (r1 * 2.0 - 1.0) * 1.2
-        if abs(angle) < 0.3:
-            angle = 0.3 if angle >= 0 else -0.3
-
-        # Dikey offset: +/- 1px
+        gs = min(1 + int(rng.next() * 3), len(word_htmls) - i)
+        gh = " ".join(word_htmls[i:i + gs])
+        r1, r2, r3, r4 = rng.next(), rng.next(), rng.next(), rng.next()
+        ang = (r1 * 2.0 - 1.0) * 1.2
+        if abs(ang) < 0.3:
+            ang = 0.3 if ang >= 0 else -0.3
         dy = (r2 * 2.0 - 1.0) * 1.0
-
-        # Font-size varyasyonu: %97-%103
-        fs_pct = 97 + r3 * 6
-
-        style = (
+        fs = 97 + r3 * 6
+        stl = (
             f"display:inline-block;"
-            f"transform:rotate({angle:.2f}deg) translateY({dy:.1f}px);"
-            f"font-size:{fs_pct:.1f}%;"
+            f"transform:rotate({ang:.2f}deg) translateY({dy:.1f}px);"
+            f"font-size:{fs:.1f}%;"
             f"transform-origin:center center"
         )
-
-        zw_idx = int(r4 * len(_ZWCHARS)) % len(_ZWCHARS)
-        zw_char = _ZWCHARS[zw_idx]
-
-        result_parts.append(f'<span class="ocr-wg" style="{style}">{group_html}</span>')
-
-        if i + group_size < len(word_htmls):
-            result_parts.append(f" {zw_char}")
-
-        i += group_size
+        # K6: Zero-width Unicode
+        zw = _ZWCHARS[int(r4 * len(_ZWCHARS)) % len(_ZWCHARS)]
+        result_parts.append(f'<span class="ocr-wg" style="{stl}">{gh}</span>')
+        if i + gs < len(word_htmls):
+            result_parts.append(f" {zw}")
+        i += gs
 
     return "".join(result_parts)
 
@@ -528,7 +580,7 @@ def question_bank(student_id: str, quiz_session: str) -> list[dict[str, Any]]:
             "title": "Tekstil Fabrikasi",
             "text": (
                 f"Uzunluk testinden kalma olasiligi P(U)={p_u:.3f}, doku hatasi P(D)={p_d:.3f}, "
-                f"iki hatanin birlikte olasiligi P(Uâˆ©D)={p_ud:.3f}. "
+                f"iki hatanin birlikte olasiligi P(U\u2229D)={p_ud:.3f}. "
                 "Uzunluk testinden kalan bir seridin doku hatali olma olasiligi nedir (P(D|U))?"
             ),
             "answer": p_ud / p_u,
@@ -553,7 +605,7 @@ def question_bank(student_id: str, quiz_session: str) -> list[dict[str, Any]]:
             "title": "Arac Bakim Servisi",
             "text": (
                 f"Yag degisimi olasiligi P(Y)={p_y:.3f}, filtre degisimi olasiligi P(F)={p_f:.3f}, "
-                f"birlikte olasilik P(Yâˆ©F)={p_yf:.3f}. "
+                f"birlikte olasilik P(Y\u2229F)={p_yf:.3f}. "
                 "Yag degisimi gereken aracin filtre degisimine de ihtiyaci olma olasiligi nedir (P(F|Y))?"
             ),
             "answer": p_yf / p_y,
@@ -637,6 +689,11 @@ def question_bank(student_id: str, quiz_session: str) -> list[dict[str, Any]]:
 def check_answer(user_value: float, correct_value: float, rel_tol: float) -> bool:
     """% tabanli toleransli kontrol."""
     return math.isclose(user_value, correct_value, rel_tol=rel_tol, abs_tol=1e-4)
+
+
+def non_empty_line_count(value: str) -> int:
+    """Metindeki bos olmayan satir sayisini verir."""
+    return sum(1 for line in (value or "").splitlines() if line.strip())
 
 
 def _base_figure(width: float = 6.0, height: float = 3.2):
@@ -862,6 +919,7 @@ def record_result(
         row[f"q{i}_given"] = item["given"]
         row[f"q{i}_correct"] = item["correct"]
         row[f"q{i}_is_correct"] = item["is_correct"]
+        row[f"q{i}_explanation"] = str(item.get("explanation") or "").strip()
 
     new_df = pd.DataFrame([row])
     if RESULTS_PATH.exists():
@@ -1134,6 +1192,12 @@ def teacher_view():
 
 
 def render_question_card(title: str, body: str, index: int):
+    body = (
+        body.replace("âˆ©", "∩")
+        .replace("Ã¢Ë†Â©", "∩")
+        .replace("P(U@D)", "P(U∩D)")
+        .replace("P(Y@F)", "P(Y∩F)")
+    )
     rng = _get_ocr_rng()
     if rng is not None:
         rendered_title = _ocr_shield_full(f"Soru {index}: {title}", rng)
@@ -1205,40 +1269,19 @@ def inject_styles():
         [data-testid="stSidebar"] ::-webkit-scrollbar-track {
             background: rgba(255, 255, 255, 0.06);
         }
-        /* ==== OCR Bozucu Stiller ==== */
-        /* Katman 1: Harf bazinda - yarilama wrapper */
-        .ocr-w {
-            display: inline-block;
-            position: relative;
-            user-select: text;
-            line-height: 1;
-        }
-        /* Ust yarim: inline-block olarak yer kaplar */
-        .ocr-t {
-            display: inline-block;
-            user-select: text;
-        }
-        /* Alt yarim: absolute ile ust yarinin uzerine biner */
-        .ocr-b {
-            display: inline-block;
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            pointer-events: none;
-            user-select: none;
-        }
-        /* Katman 1: Yarilama olmayan karakterler */
-        .ocr-g {
-            display: inline;
-            user-select: text;
-        }
-        /* Katman 2: Kelime grubu wrapper */
-        .ocr-wg {
-            display: inline-block;
-            user-select: text;
-            vertical-align: baseline;
-        }
+        /* ==== OCR/VLM Kalkan Stilleri (K1-K7) ==== */
+        .ocr-w { display:inline-block; position:relative; user-select:text; line-height:1; }
+        .ocr-t { display:inline-block; user-select:text; }
+        .ocr-b { display:inline-block; position:absolute; left:0; top:0; width:100%; pointer-events:none; user-select:none; }
+        .ocr-g { display:inline; user-select:text; }
+        .ocr-wg { display:inline-block; user-select:text; vertical-align:baseline; }
+        /* K3: Hayalet karakter */
+        .ocr-cw { display:inline-block; position:relative; }
+        .ocr-ghost { position:absolute; left:0; top:0; pointer-events:none; user-select:none; filter:blur(0.3px); color:rgba(255,255,255,0.9); }
+        /* K4: Phantom sayilar */
+        .ocr-nw { display:inline-block; position:relative; }
+        .ocr-phantom { position:absolute; left:0; top:0; white-space:nowrap; pointer-events:none; user-select:none; color:rgba(255,255,255,1); filter:blur(0.5px); }
+        /* Soru kartlari */
         .q-card {
             background: linear-gradient(140deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03));
             border: 1px solid var(--edge);
@@ -1246,17 +1289,38 @@ def inject_styles():
             padding: 16px 18px;
             margin-bottom: 10px;
             box-shadow: 0 18px 35px rgba(0,0,0,0.30);
+            position: relative;
+            overflow: hidden;
+        }
+        /* K7: CSS gorsel gurultu - crosshatch pattern */
+        .q-card::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image:
+                repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.012) 2px, rgba(255,255,255,0.012) 4px),
+                repeating-linear-gradient(-30deg, transparent, transparent 3px, rgba(180,200,255,0.008) 3px, rgba(180,200,255,0.008) 5px);
+            pointer-events: none;
+            z-index: 1;
+            border-radius: inherit;
         }
         .q-title {
             color: var(--ink);
             font-weight: 700;
             font-size: 1.02rem;
             margin-bottom: 6px;
+            position: relative; z-index: 2;
         }
+        /* K7: text-shadow gorsel gurultu - OCR edge detection bozar */
         .q-body {
             color: var(--ink);
             line-height: 1.55;
             font-size: 0.95rem;
+            position: relative; z-index: 2;
+            text-shadow:
+                0.4px 0.3px 0px rgba(255,150,100,0.07),
+                -0.3px 0.4px 0px rgba(100,180,255,0.06),
+                0.2px -0.3px 0px rgba(150,255,130,0.05);
         }
         </style>
         """,
@@ -1333,7 +1397,20 @@ def main():
                 step=0.001,
                 format="%.4f",
             )
-            answers.append({"given": user_value, "correct": q["answer"], "tolerance": q["tolerance"]})
+            explanation = st.text_area(
+                "Cozumunu 2-3 satirla acikla",
+                key=f"exp_{idx}",
+                height=88,
+                placeholder="Kullandiginiz formul ve adimlari kisaca yazin.",
+            )
+            answers.append(
+                {
+                    "given": user_value,
+                    "correct": q["answer"],
+                    "tolerance": q["tolerance"],
+                    "explanation": explanation.strip(),
+                }
+            )
 
             fig = render_question_visual(q)
             if fig is not None:
@@ -1345,11 +1422,26 @@ def main():
             st.error("Bu oturum icin kaydiniz zaten alinmis.")
             st.stop()
 
+        missing_explanations = [
+            str(i) for i, ans in enumerate(answers, start=1) if non_empty_line_count(ans.get("explanation", "")) < 2
+        ]
+        if missing_explanations:
+            st.error(
+                "Her soru icin en az 2 satir cozum aciklamasi giriniz. "
+                f"Eksik sorular: {', '.join(missing_explanations)}"
+            )
+            st.stop()
+
         scored: list[dict[str, Any]] = []
         score = 0
         for ans, q in zip(answers, questions):
             ok = check_answer(ans["given"], q["answer"], q["tolerance"])
-            scored_item = {"given": ans["given"], "correct": q["answer"], "is_correct": ok}
+            scored_item = {
+                "given": ans["given"],
+                "correct": q["answer"],
+                "is_correct": ok,
+                "explanation": ans.get("explanation", ""),
+            }
             scored.append(scored_item)
             if ok:
                 score += 20
@@ -1363,3 +1455,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
