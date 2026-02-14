@@ -1439,7 +1439,7 @@ def main():
     st.caption(f"Baz alinan saat dilimi: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now_in_app_timezone())}")
 
     student_name = st.text_input("Ad Soyad")
-    student_id = st.text_input("Ogrenci Numarasi / ID")
+    student_id = st.text_input("Ogrenci Numarasi (9 rakam)", max_chars=9, placeholder="210205901")
     with st.expander("Ogretmen Bilgisi (Ac/Kapat)", expanded=False):
         teacher_name = st.selectbox(
             "Ogretmeninizi seciniz",
@@ -1450,7 +1450,15 @@ def main():
     student_name_clean = student_name.strip()
     student_id_clean = student_id.strip()
     teacher_name_clean = teacher_name.strip()
+
+    # Ogrenci numarasi validasyonu
     if student_id_clean:
+        if not student_id_clean.isdigit():
+            st.error("Ogrenci numarasi sadece rakamlardan olusmalidir.")
+            st.stop()
+        if len(student_id_clean) != 9:
+            st.error("Ogrenci numarasi tam olarak 9 rakam olmalidir.")
+            st.stop()
         inject_student_id_overlay(student_id_clean)
 
     if not student_name_clean or not student_id_clean:
