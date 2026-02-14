@@ -1224,52 +1224,52 @@ def _generate_bg_svg(rng: OcrShieldRng, width: int = 600, height: int = 200) -> 
     """
     elements: list[str] = []
 
-    # Rastgele noktalar (15-25 adet)
-    dot_count = 15 + int(rng.next() * 10)
+    # Rastgele noktalar (40-60 adet, belirgin)
+    dot_count = 40 + int(rng.next() * 20)
     dot_colors = ["#ff9e6c", "#6cc4ff", "#ffb347", "#47d1b3", "#ff7eb3", "#40e0d0"]
     for _ in range(dot_count):
         cx = int(rng.next() * width)
         cy = int(rng.next() * height)
-        r = 1 + rng.next() * 3
+        r = 1.5 + rng.next() * 4
         color = dot_colors[int(rng.next() * len(dot_colors)) % len(dot_colors)]
-        opacity = f"{0.04 + rng.next() * 0.06:.2f}"
+        opacity = f"{0.10 + rng.next() * 0.12:.2f}"
         elements.append(
             f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" '
             f'fill="{color}" opacity="{opacity}"/>'
         )
 
-    # Ince cizgiler (5-8 adet)
-    line_count = 5 + int(rng.next() * 3)
+    # Cizgiler (12-18 adet, kalin)
+    line_count = 12 + int(rng.next() * 6)
     for _ in range(line_count):
         x1 = int(rng.next() * width)
         y1 = int(rng.next() * height)
         x2 = int(rng.next() * width)
         y2 = int(rng.next() * height)
         color = dot_colors[int(rng.next() * len(dot_colors)) % len(dot_colors)]
-        opacity = f"{0.03 + rng.next() * 0.04:.2f}"
+        opacity = f"{0.08 + rng.next() * 0.10:.2f}"
         elements.append(
             f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
-            f'stroke="{color}" stroke-width="0.5" opacity="{opacity}"/>'
+            f'stroke="{color}" stroke-width="1.0" opacity="{opacity}"/>'
         )
 
-    # Sahte sayilar (8-12 adet) - VLM bunlari gercek degerlerle karistirir
-    fake_count = 8 + int(rng.next() * 4)
+    # Sahte sayilar (20-30 adet, belirgin)
+    fake_count = 20 + int(rng.next() * 10)
     for _ in range(fake_count):
         fx = int(rng.next() * (width - 40))
         fy = 10 + int(rng.next() * (height - 15))
         fake_val = f"{rng.next():.2f}"
-        font_size = 8 + int(rng.next() * 6)
+        font_size = 10 + int(rng.next() * 8)
         color = dot_colors[int(rng.next() * len(dot_colors)) % len(dot_colors)]
-        opacity = f"{0.04 + rng.next() * 0.06:.2f}"
-        angle = int((rng.next() * 2 - 1) * 15)
+        opacity = f"{0.12 + rng.next() * 0.13:.2f}"
+        angle = int((rng.next() * 2 - 1) * 20)
         elements.append(
             f'<text x="{fx}" y="{fy}" font-size="{font_size}" '
             f'fill="{color}" opacity="{opacity}" '
             f'transform="rotate({angle},{fx},{fy})">{fake_val}</text>'
         )
 
-    # Sahte P(...) ifadeleri (3-5 adet) - olasilik sorusu gibi gorunur
-    expr_count = 3 + int(rng.next() * 2)
+    # Sahte P(...) ifadeleri (8-14 adet, belirgin)
+    expr_count = 8 + int(rng.next() * 6)
     expr_templates = ["P(A)", "P(B)", "P(A∩B)", "P(A|B)", "P(B|A)", "P(A∪B)"]
     for _ in range(expr_count):
         fx = int(rng.next() * (width - 60))
@@ -1277,10 +1277,10 @@ def _generate_bg_svg(rng: OcrShieldRng, width: int = 600, height: int = 200) -> 
         expr = expr_templates[int(rng.next() * len(expr_templates)) % len(expr_templates)]
         fake_val = f"{rng.next():.2f}"
         label = f"{expr}={fake_val}"
-        font_size = 7 + int(rng.next() * 4)
+        font_size = 9 + int(rng.next() * 6)
         color = dot_colors[int(rng.next() * len(dot_colors)) % len(dot_colors)]
-        opacity = f"{0.03 + rng.next() * 0.05:.2f}"
-        angle = int((rng.next() * 2 - 1) * 10)
+        opacity = f"{0.10 + rng.next() * 0.12:.2f}"
+        angle = int((rng.next() * 2 - 1) * 15)
         elements.append(
             f'<text x="{fx}" y="{fy}" font-size="{font_size}" '
             f'fill="{color}" opacity="{opacity}" '
