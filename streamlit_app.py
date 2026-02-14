@@ -190,11 +190,20 @@ class OcrShieldRng:
         return ((t ^ (t >> 14)) & 0xFFFFFFFF) / 4294967296.0
 
 
-# OCR bozucu renk paleti: birbirine yakin tonlar, insan rahat gorur ama
-# iki-renkli yarilama OCR karakter sinirlarini bozar.
-_OCR_COLORS = [
-    "#e8eaed", "#d4d8dd", "#c0c8d0", "#f0e6dc",
-    "#dce8f0", "#e0d8f0", "#f0dce0", "#d8f0dc",
+# OCR bozucu renk paleti: koyu arka plan uzerinde okunabilir ama
+# birbirinden farkli iki grup. Yarilanan harfin ust/alt yarisi
+# farkli gruptan renk alir -> OCR karakter sinirini cozemez.
+_OCR_WARM = ["#f8e8d8", "#f5dcc8", "#fce4d0", "#f0d8c0"]   # sicak beyaz tonlari
+_OCR_COOL = ["#d0e8f8", "#c8ddf5", "#d0e4fc", "#c0d8f0"]   # soguk beyaz tonlari
+
+# Sifir-genislikli Unicode karakterler: gorunmez ama OCR metin
+# segmentasyonunu bozar.
+_ZWCHARS = [
+    "\u200b",  # zero-width space
+    "\u200c",  # zero-width non-joiner
+    "\u200d",  # zero-width joiner
+    "\u2060",  # word joiner
+    "\ufeff",  # zero-width no-break space
 ]
 
 
@@ -205,67 +214,127 @@ def _compute_seed_from_id(student_id: str) -> int:
 
 
 def _ocr_shield_text(text: str, rng: OcrShieldRng) -> str:
-    """Duz metin stringini karakter-bazli OCR bozucu HTML'e donusturur.
+    """KATMAN 1 - Harf bazinda OCR bozucu.
 
-    Her karakter ayri bir <span> icine alinir. Ogrenci numarasindan turetilen
-    deterministik desene gore:
-    - ~40% karakterlerin ust yarisi bir renk, alt yarisi baska renk olur
-      (clip-path + absolute positioning ile)
-    - Tum karakterlere sub-pixel translate() kaymasi uygulanir
-    - Letter-spacing varyasyonu eklenir
-
-    Sonuc: insan rahat okur, OCR/VLM karakter sinirlarini cozemez.
+    Her karakter ayri bir <span> icine alinir. ~35% olasilikla
+    harfin ustu ve alti farkli renkte boyanir (clip-path ile).
+    Geri kalan harflere sub-pixel shift ve letter-spacing varyasyonu
+    uygulanir.
     """
     parts: list[str] = []
     for ch in text:
-        # Bosluk karakterlerini olduklari gibi birak
         if ch in (" ", "\n", "\t", "\r"):
             parts.append(ch)
             continue
 
-        # HTML-guvenli karakter
         safe_ch = html.escape(ch)
-
         r1 = rng.next()
         r2 = rng.next()
         r3 = rng.next()
         r4 = rng.next()
         r5 = rng.next()
 
-        # ~40% olasilikla yarilama (split-color) uygula
-        if r1 < 0.40:
-            clip_pct = 40 + int(r2 * 20)  # %40-%60 arasi
-            c_idx1 = int(r4 * len(_OCR_COLORS)) % len(_OCR_COLORS)
-            c_idx2 = (c_idx1 + 1 + int(r5 * (len(_OCR_COLORS) - 1))) % len(_OCR_COLORS)
+        # ~35% olasilikla yarilama (split-color) uygula
+        if r1 < 0.35:
+            clip_pct = 42 + int(r2 * 16)  # %42-%58 arasi
+            warm_idx = int(r4 * len(_OCR_WARM)) % len(_OCR_WARM)
+            cool_idx = int(r5 * len(_OCR_COOL)) % len(_OCR_COOL)
             if r3 < 0.5:
-                top_color = _OCR_COLORS[c_idx1]
-                bot_color = _OCR_COLORS[c_idx2]
+                top_color, bot_color = _OCR_WARM[warm_idx], _OCR_COOL[cool_idx]
             else:
-                top_color = _OCR_COLORS[c_idx2]
-                bot_color = _OCR_COLORS[c_idx1]
+                top_color, bot_color = _OCR_COOL[cool_idx], _OCR_WARM[warm_idx]
 
-            # Sub-pixel shift alt yariya
-            sx = f"{r1 * 0.8 - 0.4:.2f}"
-            sy = f"{r2 * 0.6 - 0.3:.2f}"
+            # Alt yariya cok kucuk sub-pixel shift
+            sx = f"{r1 * 0.5 - 0.25:.2f}"
 
             parts.append(
                 f'<span class="ocr-w">'
                 f'<span class="ocr-t" style="clip-path:inset(0 0 {100-clip_pct}% 0);color:{top_color}">{safe_ch}</span>'
                 f'<span class="ocr-b" style="clip-path:inset({clip_pct}% 0 0 0);color:{bot_color};'
-                f'transform:translate({sx}px,{sy}px)">{safe_ch}</span>'
+                f'transform:translateX({sx}px)">{safe_ch}</span>'
                 f'</span>'
             )
         else:
-            # Yarilama yok: sub-pixel shift + letter-spacing varyasyonu
+            # Yarilama yok: sub-pixel shift + letter-spacing
             dx = f"{r2 * 0.6 - 0.3:.2f}"
             dy = f"{r3 * 0.4 - 0.2:.2f}"
             ls = f"{r4 * 0.4 - 0.2:.2f}"
-            style_parts = [f"letter-spacing:{ls}px"]
+            style = f"letter-spacing:{ls}px"
             if abs(float(dx)) > 0.08 or abs(float(dy)) > 0.08:
-                style_parts.append(f"position:relative;transform:translate({dx}px,{dy}px)")
-            parts.append(f'<span class="ocr-g" style="{";".join(style_parts)}">{safe_ch}</span>')
+                style += f";position:relative;transform:translate({dx}px,{dy}px)"
+            parts.append(f'<span class="ocr-g" style="{style}">{safe_ch}</span>')
 
     return "".join(parts)
+
+
+def _ocr_shield_words(char_html: str, raw_text: str, rng: OcrShieldRng) -> str:
+    """KATMAN 2 - Kelime bazinda OCR bozucu.
+
+    Harf-bazli isle gelmis HTML'i kelimelere gore gruplar ve:
+    - Hafif rotation (0.3-1.5 derece) uygular
+    - Kucuk dikey offset ekler  
+    - Kelimeler arasina sifir-genislikli Unicode karakterler serpistirir
+    - Kelime gruplarina hafif font-size varyasyonu verir
+
+    Bu katman OCR'in satir/kelime segmentasyonunu bozar.
+    """
+    # raw_text'i bosluga gore ayirarak her kelimenin indekslerini bul
+    # char_html icindeki karsiliklari etiketlere bakarak bolmek yerine
+    # daha guvenilir bir yol: raw_text'in bosluk pozisyonlarini tespit et
+    # ve char_html'i o pozisyonlarda bol
+    word_segments = raw_text.split(" ")
+    html_segments: list[str] = []
+
+    # Her kelime icin basit yaklaşim: kelimenin her karakterini
+    # ocr-g/ocr-w span olarak islenmis HTML'den cikar
+    # Ama bu zor, bunun yerine tum char_html'i bosluktan boluyoruz
+    # char_html'de bosluklar " " olarak kaldigindan split islemi calisir
+    raw_parts = char_html.split(" ")
+
+    result_parts: list[str] = []
+    i = 0
+    while i < len(raw_parts):
+        # 1-3 kelimelik gruplar olustur
+        group_size = 1 + int(rng.next() * 3)  # 1, 2 veya 3
+        group_size = min(group_size, len(raw_parts) - i)
+        group_html = " ".join(raw_parts[i:i+group_size])
+
+        r1 = rng.next()
+        r2 = rng.next()
+        r3 = rng.next()
+        r4 = rng.next()
+
+        # Rotation: +/- 0.3 ile 1.5 derece arasi
+        angle = (r1 * 2.0 - 1.0) * 1.2  # -1.2 ile +1.2 derece
+        if abs(angle) < 0.3:
+            angle = 0.3 if angle >= 0 else -0.3
+
+        # Dikey offset: +/- 0.5-1.5px
+        dy = (r2 * 2.0 - 1.0) * 1.0  # -1 ile +1 px
+
+        # Font-size varyasyonu: %97-%103
+        fs_pct = 97 + r3 * 6  # 97-103%
+
+        style = (
+            f"display:inline-block;"
+            f"transform:rotate({angle:.2f}deg) translateY({dy:.1f}px);"
+            f"font-size:{fs_pct:.1f}%;"
+            f"transform-origin:center center"
+        )
+
+        # Sifir-genislikli karakter ekle (kelime gruplari arasina)
+        zw_idx = int(r4 * len(_ZWCHARS)) % len(_ZWCHARS)
+        zw_char = _ZWCHARS[zw_idx]
+
+        result_parts.append(f'<span class="ocr-wg" style="{style}">{group_html}</span>')
+
+        # Son grup degilse, bosluk + sifir-genislikli karakter ekle
+        if i + group_size < len(raw_parts):
+            result_parts.append(f" {zw_char}")
+
+        i += group_size
+
+    return "".join(result_parts)
 
 
 def inject_student_id_overlay(student_id: str) -> None:
@@ -1071,8 +1140,14 @@ def teacher_view():
 def render_question_card(title: str, body: str, index: int):
     rng = _get_ocr_rng()
     if rng is not None:
-        rendered_title = _ocr_shield_text(f"Soru {index}: {title}", rng)
-        rendered_body = _ocr_shield_text(body, rng)
+        raw_title = f"Soru {index}: {title}"
+        raw_body = body
+        # Katman 1: harf bazinda tahribat
+        char_title = _ocr_shield_text(raw_title, rng)
+        char_body = _ocr_shield_text(raw_body, rng)
+        # Katman 2: kelime bazinda tahribat
+        rendered_title = _ocr_shield_words(char_title, raw_title, rng)
+        rendered_body = _ocr_shield_words(char_body, raw_body, rng)
     else:
         rendered_title = f"Soru {index}: {html.escape(title)}"
         rendered_body = html.escape(body)
@@ -1140,27 +1215,39 @@ def inject_styles():
         [data-testid="stSidebar"] ::-webkit-scrollbar-track {
             background: rgba(255, 255, 255, 0.06);
         }
-        /* OCR bozucu: karakter-seviyesinde clip-path + renk kaymasi */
+        /* ==== OCR Bozucu Stiller ==== */
+        /* Katman 1: Harf bazinda - yarilama wrapper */
         .ocr-w {
             display: inline-block;
             position: relative;
             user-select: text;
+            line-height: 1;
         }
+        /* Ust yarim: inline-block olarak yer kaplar */
         .ocr-t {
-            display: inline;
+            display: inline-block;
             user-select: text;
         }
+        /* Alt yarim: absolute ile ust yarinin uzerine biner */
         .ocr-b {
-            display: inline;
+            display: inline-block;
             position: absolute;
             left: 0;
             top: 0;
+            width: 100%;
             pointer-events: none;
             user-select: none;
         }
+        /* Katman 1: Yarilama olmayan karakterler */
         .ocr-g {
             display: inline;
             user-select: text;
+        }
+        /* Katman 2: Kelime grubu wrapper */
+        .ocr-wg {
+            display: inline-block;
+            user-select: text;
+            vertical-align: baseline;
         }
         .q-card {
             background: linear-gradient(140deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03));
