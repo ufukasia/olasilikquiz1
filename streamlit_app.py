@@ -19,6 +19,7 @@ import random
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 import qrcode
@@ -30,6 +31,8 @@ ENV_PATH = Path(".env")
 TEACHER_CODE_HASH_KEY = "TEACHER_CODE_HASH"
 TEACHER_CODE_KEY = "TEACHER_CODE"
 PUBLIC_BASE_URL_KEY = "PUBLIC_BASE_URL"
+APP_TIMEZONE_KEY = "APP_TIMEZONE"
+DEFAULT_APP_TIMEZONE = "Europe/Istanbul"
 TEACHER_OPTIONS = [
     "Prof. Dr. Yalçın ATA",
     "Prof. Dr. Arif DEMİR",
@@ -51,11 +54,11 @@ DEFAULT_QUIZ_CONTROL: dict[str, Any] = {
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return now_in_app_timezone().isoformat(timespec="seconds")
 
 
 def _now_session_id() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M%S")
+    return now_in_app_timezone().strftime("%Y%m%d-%H%M%S")
 
 
 def hash_secret(secret: str) -> str:
@@ -130,6 +133,48 @@ def get_public_base_url() -> str:
     return get_secret_or_env(PUBLIC_BASE_URL_KEY)
 
 
+def resolve_app_timezone() -> tuple[ZoneInfo, str, str]:
+    """Uygulamanin kullanacagi saat dilimini cozer.
+
+    Donus: (timezone_obj, effective_timezone_name, invalid_requested_name)
+    """
+    requested_name = get_secret_or_env(APP_TIMEZONE_KEY) or DEFAULT_APP_TIMEZONE
+    try:
+        return ZoneInfo(requested_name), requested_name, ""
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC"), "UTC", requested_name
+
+
+def now_in_app_timezone() -> datetime:
+    """Uygulamanin baz aldigi saat diliminde simdiki zaman."""
+    tz, _, _ = resolve_app_timezone()
+    return datetime.now(tz)
+
+
+def _utc_offset_text(value: datetime) -> str:
+    raw = value.strftime("%z")
+    if len(raw) == 5:
+        return f"{raw[:3]}:{raw[3:]}"
+    return raw
+
+
+def format_dt_obj_for_ui(value: datetime) -> str:
+    """Datetime nesnesini arayuzde okunur ve saat dilimi belirtili formatta yazar."""
+    offset = _utc_offset_text(value)
+    return f"{value.strftime('%d.%m.%Y %H:%M:%S')} (UTC{offset})"
+
+
+def time_basis_for_ui() -> str:
+    """Sistemin hangi saat dilimini baz aldigini metin olarak verir."""
+    now = now_in_app_timezone()
+    _, effective_name, invalid_requested = resolve_app_timezone()
+    offset = _utc_offset_text(now)
+    base = f"{effective_name} (UTC{offset})"
+    if invalid_requested:
+        return f"{base} | APP_TIMEZONE gecersiz: {invalid_requested}"
+    return base
+
+
 def is_teacher_code_configured() -> bool:
     """Ogretmen kod hash ayari var mi?"""
     value = get_teacher_code_hash()
@@ -149,10 +194,17 @@ def parse_iso_datetime(value: str) -> datetime | None:
     """ISO metnini datetime nesnesine cevirir."""
     if not value:
         return None
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
         return None
+    tz, _, _ = resolve_app_timezone()
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=tz)
+    return parsed.astimezone(tz)
 
 
 def format_dt_for_ui(value: str) -> str:
@@ -160,7 +212,7 @@ def format_dt_for_ui(value: str) -> str:
     parsed = parse_iso_datetime(value)
     if parsed is None:
         return "-"
-    return parsed.strftime("%d.%m.%Y %H:%M")
+    return format_dt_obj_for_ui(parsed)
 
 
 def auto_close_quiz_if_expired(control: dict[str, Any]) -> dict[str, Any]:
@@ -169,7 +221,7 @@ def auto_close_quiz_if_expired(control: dict[str, Any]) -> dict[str, Any]:
     if not control.get("is_open") or end_at is None:
         return control
 
-    if datetime.now() >= end_at:
+    if now_in_app_timezone() >= end_at:
         control["is_open"] = False
         control["closed_at"] = _now_iso()
         save_quiz_control(control)
@@ -657,7 +709,7 @@ def record_result(
 def evaluate_quiz_availability(control: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
     """Quizin o an ogrenciye acik olup olmadigini belirler."""
     normalized = dict(control)
-    now = datetime.now()
+    now = now_in_app_timezone()
     end_at = parse_iso_datetime(str(normalized.get("session_end") or ""))
     if normalized.get("is_open") and end_at is not None and now >= end_at:
         normalized["is_open"] = False
@@ -667,11 +719,21 @@ def evaluate_quiz_availability(control: dict[str, Any]) -> tuple[bool, str, dict
 
     active_session = str(normalized.get("active_session") or "")
     if not normalized.get("is_open") or not active_session:
-        return False, "Quiz su an kapali. Ogretmen panelinden yeni oturum acilabilir.", normalized
+        return (
+            False,
+            f"Quiz su an kapali. Baz alinan saat: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now)}",
+            normalized,
+        )
 
     start_at = parse_iso_datetime(str(normalized.get("session_start") or ""))
     if start_at is not None and now < start_at:
-        return False, f"Quiz henuz baslamadi. Baslangic: {format_dt_for_ui(normalized['session_start'])}", normalized
+        return (
+            False,
+            "Quiz henuz baslamadi. "
+            f"Sistem saati: {format_dt_obj_for_ui(now)} | "
+            f"Baslangic: {format_dt_for_ui(normalized['session_start'])}",
+            normalized,
+        )
     return True, "", normalized
 
 
@@ -801,9 +863,11 @@ def teacher_view():
                 rerun_app()
 
     control = auto_close_quiz_if_expired(load_quiz_control())
-    now = datetime.now()
+    now = now_in_app_timezone()
 
     st.markdown("### Quiz Yonetimi")
+    st.caption(f"Baz alinan saat dilimi: {time_basis_for_ui()}")
+    st.caption(f"Sunucu sistem saati: {format_dt_obj_for_ui(now)}")
     if control["is_open"] and control["active_session"]:
         st.success(f"Durum: ACIK | Oturum: {control['active_session']}")
         st.caption(f"Baslangic: {format_dt_for_ui(control['session_start'])}")
@@ -838,14 +902,19 @@ def teacher_view():
 
         default_start = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
         default_end = default_start + timedelta(minutes=45)
+        default_start_time = default_start.time().replace(tzinfo=None)
+        default_end_time = default_end.time().replace(tzinfo=None)
         with st.expander("Yeni Oturum Zaman Penceresi", expanded=True):
             start_date = st.date_input("Baslangic tarihi", value=default_start.date(), key="session_start_date")
-            start_time = st.time_input("Baslangic saati", value=default_start.time(), key="session_start_time")
+            start_time = st.time_input("Baslangic saati", value=default_start_time, key="session_start_time")
             end_date = st.date_input("Bitis tarihi", value=default_end.date(), key="session_end_date")
-            end_time = st.time_input("Bitis saati", value=default_end.time(), key="session_end_time")
+            end_time = st.time_input("Bitis saati", value=default_end_time, key="session_end_time")
 
-        start_at = datetime.combine(start_date, start_time)
-        end_at = datetime.combine(end_date, end_time)
+        tz, _, _ = resolve_app_timezone()
+        start_at = datetime.combine(start_date, start_time).replace(tzinfo=tz)
+        end_at = datetime.combine(end_date, end_time).replace(tzinfo=tz)
+        st.caption(f"Secilen baslangic: {format_dt_obj_for_ui(start_at)}")
+        st.caption(f"Secilen bitis: {format_dt_obj_for_ui(end_at)}")
         if end_at <= start_at:
             st.error("Bitis zamani, baslangic zamanindan sonra olmalidir.")
         elif st.button("Quizi Ac (Yeni Oturum)", type="primary", use_container_width=True, key="open_quiz_btn"):
@@ -933,6 +1002,29 @@ def inject_styles():
         [data-testid="stSidebar"] {
             background: linear-gradient(180deg, #121f40 0%, #0f1834 100%);
             border-left: 1px solid var(--edge);
+        }
+        [data-testid="stSidebarContent"] {
+            height: 100vh;
+            overflow-y: auto;
+            overflow-x: hidden;
+            overscroll-behavior: contain;
+            padding-bottom: 20px;
+        }
+        [data-testid="stSidebar"] > div:first-child {
+            height: 100vh;
+            overflow-y: auto;
+            overflow-x: hidden;
+            overscroll-behavior: contain;
+        }
+        [data-testid="stSidebar"] ::-webkit-scrollbar {
+            width: 10px;
+        }
+        [data-testid="stSidebar"] ::-webkit-scrollbar-thumb {
+            background: rgba(203, 213, 225, 0.35);
+            border-radius: 999px;
+        }
+        [data-testid="stSidebar"] ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.06);
         }
         @keyframes ocr-luma-jitter {
             0% {
@@ -1067,6 +1159,7 @@ def main():
         f"Baslangic: {format_dt_for_ui(quiz_control['session_start'])} | "
         f"Bitis: {format_dt_for_ui(quiz_control['session_end'])}"
     )
+    st.caption(f"Baz alinan saat dilimi: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now_in_app_timezone())}")
 
     student_name = st.text_input("Ad Soyad")
     student_id = st.text_input("Ogrenci Numarasi / ID")
