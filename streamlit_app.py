@@ -187,27 +187,27 @@ def build_student_id_overlay_data_uri(student_id: str) -> str:
     """Ogrenci numarasini 58 derece watermark SVG data URI'sine donusturur."""
     token = html.escape(_sanitize_overlay_text(student_id))
     svg = f"""
-<svg xmlns='http://www.w3.org/2000/svg' width='560' height='300' viewBox='0 0 560 300'>
+<svg xmlns='http://www.w3.org/2000/svg' width='980' height='560' viewBox='0 0 980 560'>
   <rect width='100%' height='100%' fill='transparent'/>
-  <g transform='rotate(58 280 150)'>
-    <text x='-180' y='188'
+  <g transform='rotate(58 490 280)'>
+    <text x='140' y='320'
           font-family='monospace'
-          font-size='44'
-          font-weight='700'
+          font-size='68'
+          font-weight='800'
           letter-spacing='3'
-          fill='rgba(255, 82, 82, 0.22)'>{token}</text>
-    <text x='-176' y='192'
+          fill='rgba(255, 82, 82, 0.27)'>{token}</text>
+    <text x='145' y='325'
           font-family='monospace'
-          font-size='44'
-          font-weight='700'
+          font-size='68'
+          font-weight='800'
           letter-spacing='3'
-          fill='rgba(73, 229, 255, 0.20)'>{token}</text>
-    <text x='-184' y='184'
+          fill='rgba(73, 229, 255, 0.25)'>{token}</text>
+    <text x='136' y='315'
           font-family='monospace'
-          font-size='44'
-          font-weight='700'
+          font-size='68'
+          font-weight='800'
           letter-spacing='3'
-          fill='rgba(255, 221, 107, 0.19)'>{token}</text>
+          fill='rgba(255, 221, 107, 0.24)'>{token}</text>
   </g>
 </svg>
 """.strip()
@@ -1119,25 +1119,25 @@ def inject_styles():
             pointer-events: none;
             z-index: 2147482999;
             mix-blend-mode: soft-light;
-            opacity: 0.45;
+            opacity: 0.32;
             background-image:
                 repeating-linear-gradient(
                     0deg,
-                    rgba(255, 255, 255, 0.040) 0px,
-                    rgba(255, 255, 255, 0.040) 1px,
-                    rgba(0, 0, 0, 0.040) 1px,
-                    rgba(0, 0, 0, 0.040) 2px
+                    rgba(255, 255, 255, 0.050) 0px,
+                    rgba(255, 255, 255, 0.050) 1px,
+                    rgba(255, 255, 255, 0.0) 1px,
+                    rgba(255, 255, 255, 0.0) 6px
                 ),
                 repeating-linear-gradient(
                     90deg,
-                    rgba(255, 255, 255, 0.035) 0px,
-                    rgba(255, 255, 255, 0.035) 1px,
-                    rgba(0, 0, 0, 0.035) 1px,
-                    rgba(0, 0, 0, 0.035) 2px
+                    rgba(0, 0, 0, 0.050) 0px,
+                    rgba(0, 0, 0, 0.050) 1px,
+                    rgba(0, 0, 0, 0.0) 1px,
+                    rgba(0, 0, 0, 0.0) 6px
                 ),
-                radial-gradient(circle at 23% 27%, rgba(255, 255, 255, 0.065) 0.6px, rgba(255, 255, 255, 0.0) 1.2px),
-                radial-gradient(circle at 74% 72%, rgba(0, 0, 0, 0.060) 0.6px, rgba(0, 0, 0, 0.0) 1.2px);
-            background-size: 3px 3px, 3px 3px, 7px 7px, 8px 8px;
+                radial-gradient(circle at 23% 27%, rgba(255, 255, 255, 0.080) 1px, rgba(255, 255, 255, 0.0) 2px),
+                radial-gradient(circle at 74% 72%, rgba(0, 0, 0, 0.080) 1px, rgba(0, 0, 0, 0.0) 2px);
+            background-size: 6px 6px, 6px 6px, 14px 14px, 16px 16px;
             animation: ocr-luma-jitter 1.15s steps(3, end) infinite;
             will-change: background-position;
         }
@@ -1152,21 +1152,21 @@ def inject_styles():
                 var(--student-id-overlay),
                 repeating-linear-gradient(
                     20deg,
-                    rgba(255, 255, 255, 0.12) 0px,
-                    rgba(255, 255, 255, 0.12) 1px,
-                    rgba(255, 255, 255, 0.0) 1px,
-                    rgba(255, 255, 255, 0.0) 8px
+                    rgba(255, 255, 255, 0.20) 0px,
+                    rgba(255, 255, 255, 0.20) 2px,
+                    rgba(255, 255, 255, 0.0) 2px,
+                    rgba(255, 255, 255, 0.0) 16px
                 ),
                 repeating-linear-gradient(
                     -20deg,
-                    rgba(4, 10, 28, 0.10) 0px,
-                    rgba(4, 10, 28, 0.10) 1px,
-                    rgba(4, 10, 28, 0.0) 1px,
-                    rgba(4, 10, 28, 0.0) 9px
+                    rgba(4, 10, 28, 0.16) 0px,
+                    rgba(4, 10, 28, 0.16) 2px,
+                    rgba(4, 10, 28, 0.0) 2px,
+                    rgba(4, 10, 28, 0.0) 19px
                 );
-            background-size: 560px 300px, 8px 8px, 9px 9px;
+            background-size: 980px 560px, 16px 16px, 19px 19px;
             background-repeat: repeat, repeat, repeat;
-            opacity: 0.95;
+            opacity: 1;
             animation: ocr-line-jitter 1.6s steps(2, end) infinite;
             will-change: transform;
         }
