@@ -1,3 +1,4 @@
+# Calistirmak icin terminale su komutu yaziniz: python -m streamlit run streamlit_app.py
 """
 Streamlit tabanli, ogrenci numarasina gore kisilestirilmis 5 soruluk quiz.
 - Soru senaryolari 2-hafta-olasilik sunumundaki temalara dayanir.
@@ -926,10 +927,97 @@ def inject_styles():
                 radial-gradient(700px 380px at 100% 10%, #2a416f 0%, rgba(42,65,111,0.0) 65%),
                 linear-gradient(160deg, #0b132b 0%, #101a35 45%, #0c1630 100%);
             color: var(--ink);
+            position: relative;
+            isolation: isolate;
         }
         [data-testid="stSidebar"] {
             background: linear-gradient(180deg, #121f40 0%, #0f1834 100%);
             border-left: 1px solid var(--edge);
+        }
+        @keyframes ocr-luma-jitter {
+            0% {
+                background-position: 0 0, 0 0, 0 0, 0 0;
+            }
+            25% {
+                background-position: 0.8px -0.6px, -0.5px 0.7px, 1px 0.5px, -0.6px -0.8px;
+            }
+            50% {
+                background-position: -0.7px 0.5px, 0.6px -0.7px, -0.8px 0.4px, 0.7px -0.6px;
+            }
+            75% {
+                background-position: 0.6px 0.7px, -0.7px -0.5px, 0.5px -0.9px, -0.5px 0.8px;
+            }
+            100% {
+                background-position: 0 0, 0 0, 0 0, 0 0;
+            }
+        }
+        @keyframes ocr-line-jitter {
+            0% {
+                transform: translate3d(0, 0, 0);
+            }
+            33% {
+                transform: translate3d(0.5px, -0.3px, 0);
+            }
+            66% {
+                transform: translate3d(-0.4px, 0.4px, 0);
+            }
+            100% {
+                transform: translate3d(0, 0, 0);
+            }
+        }
+        [data-testid="stAppViewContainer"]::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 2147482999;
+            mix-blend-mode: soft-light;
+            opacity: 0.45;
+            background-image:
+                repeating-linear-gradient(
+                    0deg,
+                    rgba(255, 255, 255, 0.040) 0px,
+                    rgba(255, 255, 255, 0.040) 1px,
+                    rgba(0, 0, 0, 0.040) 1px,
+                    rgba(0, 0, 0, 0.040) 2px
+                ),
+                repeating-linear-gradient(
+                    90deg,
+                    rgba(255, 255, 255, 0.035) 0px,
+                    rgba(255, 255, 255, 0.035) 1px,
+                    rgba(0, 0, 0, 0.035) 1px,
+                    rgba(0, 0, 0, 0.035) 2px
+                ),
+                radial-gradient(circle at 23% 27%, rgba(255, 255, 255, 0.065) 0.6px, rgba(255, 255, 255, 0.0) 1.2px),
+                radial-gradient(circle at 74% 72%, rgba(0, 0, 0, 0.060) 0.6px, rgba(0, 0, 0, 0.0) 1.2px);
+            background-size: 3px 3px, 3px 3px, 7px 7px, 8px 8px;
+            animation: ocr-luma-jitter 1.15s steps(3, end) infinite;
+            will-change: background-position;
+        }
+        [data-testid="stAppViewContainer"]::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 2147483000;
+            mix-blend-mode: soft-light;
+            background-image:
+                repeating-linear-gradient(
+                    20deg,
+                    rgba(255, 255, 255, 0.12) 0px,
+                    rgba(255, 255, 255, 0.12) 1px,
+                    rgba(255, 255, 255, 0.0) 1px,
+                    rgba(255, 255, 255, 0.0) 8px
+                ),
+                repeating-linear-gradient(
+                    -20deg,
+                    rgba(4, 10, 28, 0.10) 0px,
+                    rgba(4, 10, 28, 0.10) 1px,
+                    rgba(4, 10, 28, 0.0) 1px,
+                    rgba(4, 10, 28, 0.0) 9px
+                );
+            animation: ocr-line-jitter 1.6s steps(2, end) infinite;
+            will-change: transform;
         }
         .q-card {
             background: linear-gradient(140deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03));
