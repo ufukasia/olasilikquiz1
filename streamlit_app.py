@@ -52,6 +52,7 @@ DEFAULT_QUIZ_CONTROL: dict[str, Any] = {
     "closed_at": "",
     "session_start": "",
     "session_end": "",
+    "comment_end": "",
 }
 
 
@@ -440,12 +441,21 @@ def format_dt_for_ui(value: str) -> str:
 
 
 def auto_close_quiz_if_expired(control: dict[str, Any]) -> dict[str, Any]:
-    """Bitis zamani gecen aktif oturumu otomatik kapatir."""
-    end_at = parse_iso_datetime(str(control.get("session_end") or ""))
-    if not control.get("is_open") or end_at is None:
+    """Yorum suresi de dahil tum sureler dolduysa oturumu otomatik kapatir."""
+    if not control.get("is_open"):
         return control
 
-    if now_in_app_timezone() >= end_at:
+    now = now_in_app_timezone()
+    # Yorum suresi varsa, kapanma kriteri comment_end'dir
+    comment_end_at = parse_iso_datetime(str(control.get("comment_end") or ""))
+    end_at = parse_iso_datetime(str(control.get("session_end") or ""))
+
+    # Kapatma: comment_end varsa ona bak, yoksa session_end'e bak
+    close_at = comment_end_at or end_at
+    if close_at is None:
+        return control
+
+    if now >= close_at:
         control["is_open"] = False
         control["closed_at"] = _now_iso()
         save_quiz_control(control)
@@ -469,6 +479,7 @@ def load_quiz_control() -> dict[str, Any]:
     control["closed_at"] = str(control.get("closed_at") or "")
     control["session_start"] = str(control.get("session_start") or "")
     control["session_end"] = str(control.get("session_end") or "")
+    control["comment_end"] = str(control.get("comment_end") or "")
     return control
 
 
@@ -482,6 +493,7 @@ def save_quiz_control(control: dict[str, Any]) -> None:
         "closed_at": str(control.get("closed_at") or ""),
         "session_start": str(control.get("session_start") or ""),
         "session_end": str(control.get("session_end") or ""),
+        "comment_end": str(control.get("comment_end") or ""),
     }
     QUIZ_CONTROL_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -936,21 +948,32 @@ def record_result(
         new_df.to_csv(RESULTS_PATH, index=False, encoding="utf-8")
 
 
-def evaluate_quiz_availability(control: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
-    """Quizin o an ogrenciye acik olup olmadigini belirler."""
+def evaluate_quiz_availability(control: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    """Quizin o an ogrenciye acik olup olmadigini belirler.
+
+    Donus: (phase, message, normalized_control)
+      phase = "quiz"    -> cevap girme suresi (telefona az dokunma)
+      phase = "comment" -> yorum/aciklama suresi (telefona dokunabilir)
+      phase = "closed"  -> quiz tamamen kapali
+    """
     normalized = dict(control)
     now = now_in_app_timezone()
+
     end_at = parse_iso_datetime(str(normalized.get("session_end") or ""))
-    if normalized.get("is_open") and end_at is not None and now >= end_at:
+    comment_end_at = parse_iso_datetime(str(normalized.get("comment_end") or ""))
+
+    # Tum sureler dolduysa oturumu kapat
+    close_at = comment_end_at or end_at
+    if normalized.get("is_open") and close_at is not None and now >= close_at:
         normalized["is_open"] = False
         normalized["closed_at"] = _now_iso()
         save_quiz_control(normalized)
-        return False, "Quiz suresi doldu. Oturum otomatik kapatildi.", normalized
+        return "closed", "Quiz ve yorum suresi doldu. Oturum otomatik kapatildi.", normalized
 
     active_session = str(normalized.get("active_session") or "")
     if not normalized.get("is_open") or not active_session:
         return (
-            False,
+            "closed",
             f"Quiz su an kapali. Baz alinan saat: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now)}",
             normalized,
         )
@@ -958,13 +981,28 @@ def evaluate_quiz_availability(control: dict[str, Any]) -> tuple[bool, str, dict
     start_at = parse_iso_datetime(str(normalized.get("session_start") or ""))
     if start_at is not None and now < start_at:
         return (
-            False,
+            "closed",
             "Quiz henuz baslamadi. "
             f"Sistem saati: {format_dt_obj_for_ui(now)} | "
             f"Baslangic: {format_dt_for_ui(normalized['session_start'])}",
             normalized,
         )
-    return True, "", normalized
+
+    # Quiz cevap suresi hala devam ediyor mu?
+    if end_at is not None and now >= end_at:
+        # Quiz suresi doldu ama yorum suresi var ve devam ediyor
+        if comment_end_at is not None and now < comment_end_at:
+            remaining = int((comment_end_at - now).total_seconds())
+            mins = max(1, math.ceil(remaining / 60))
+            return (
+                "comment",
+                f"Quiz suresi doldu. Yorum yazma suresi devam ediyor (kalan: ~{mins} dk).",
+                normalized,
+            )
+        # comment_end yoksa veya o da dolduysa kapali (yukaridaki blokta yakalanir ama guvenlik icin)
+        return "closed", "Quiz suresi doldu.", normalized
+
+    return "quiz", "", normalized
 
 
 def render_session_report(df: pd.DataFrame, active_session: str):
@@ -1101,19 +1139,25 @@ def teacher_view():
     if control["is_open"] and control["active_session"]:
         st.success(f"Durum: ACIK | Oturum: {control['active_session']}")
         st.caption(f"Baslangic: {format_dt_for_ui(control['session_start'])}")
-        st.caption(f"Bitis: {format_dt_for_ui(control['session_end'])}")
+        st.caption(f"Quiz bitis: {format_dt_for_ui(control['session_end'])}")
+        if control.get("comment_end"):
+            st.caption(f"Yorum bitis: {format_dt_for_ui(control['comment_end'])}")
         if control["opened_at"]:
             st.caption(f"Acilis zamani: {format_dt_for_ui(control['opened_at'])}")
 
         start_at = parse_iso_datetime(control["session_start"])
         end_at = parse_iso_datetime(control["session_end"])
+        comment_end_at = parse_iso_datetime(str(control.get("comment_end") or ""))
         if start_at is not None and now < start_at:
             st.info("Oturum planlandi ancak henuz baslamadi.")
-        elif end_at is not None:
+        elif end_at is not None and now < end_at:
             remaining_seconds = int((end_at - now).total_seconds())
-            if remaining_seconds > 0:
-                remaining_minutes = max(1, math.ceil(remaining_seconds / 60))
-                st.info(f"Kalan sure: yaklasik {remaining_minutes} dakika")
+            remaining_minutes = max(1, math.ceil(remaining_seconds / 60))
+            st.info(f"Quiz cevap suresi kalan: ~{remaining_minutes} dakika")
+        elif end_at is not None and now >= end_at and comment_end_at is not None and now < comment_end_at:
+            remaining_seconds = int((comment_end_at - now).total_seconds())
+            remaining_minutes = max(1, math.ceil(remaining_seconds / 60))
+            st.info(f"Yorum yazma suresi kalan: ~{remaining_minutes} dakika")
 
         st.metric(
             "Bu oturumda teslim",
@@ -1139,12 +1183,23 @@ def teacher_view():
             start_time = st.time_input("Baslangic saati", value=default_start_time, key="session_start_time")
             end_date = st.date_input("Bitis tarihi", value=default_end.date(), key="session_end_date")
             end_time = st.time_input("Bitis saati", value=default_end_time, key="session_end_time")
+            comment_minutes = st.number_input(
+                "Yorum suresi (dk) — Quiz bittikten sonra aciklama yazma icin ek sure",
+                min_value=0,
+                max_value=60,
+                value=10,
+                step=1,
+                key="comment_duration_input",
+            )
 
         tz, _, _ = resolve_app_timezone()
         start_at = datetime.combine(start_date, start_time).replace(tzinfo=tz)
         end_at = datetime.combine(end_date, end_time).replace(tzinfo=tz)
+        comment_end_at = end_at + timedelta(minutes=comment_minutes) if comment_minutes > 0 else None
         st.caption(f"Secilen baslangic: {format_dt_obj_for_ui(start_at)}")
-        st.caption(f"Secilen bitis: {format_dt_obj_for_ui(end_at)}")
+        st.caption(f"Secilen quiz bitis: {format_dt_obj_for_ui(end_at)}")
+        if comment_end_at:
+            st.caption(f"Secilen yorum bitis: {format_dt_obj_for_ui(comment_end_at)}")
         if end_at <= start_at:
             st.error("Bitis zamani, baslangic zamanindan sonra olmalidir.")
         elif st.button("Quizi Ac (Yeni Oturum)", type="primary", use_container_width=True, key="open_quiz_btn"):
@@ -1156,6 +1211,7 @@ def teacher_view():
                     "closed_at": "",
                     "session_start": start_at.isoformat(timespec="seconds"),
                     "session_end": end_at.isoformat(timespec="seconds"),
+                    "comment_end": comment_end_at.isoformat(timespec="seconds") if comment_end_at else "",
                 }
             )
             rerun_app()
@@ -1413,6 +1469,25 @@ def inject_styles():
     )
 
 
+def _update_explanations(student_id: str, quiz_session: str, explanations: dict[int, str]) -> None:
+    """Mevcut CSV kaydindaki aciklama alanlarini gunceller."""
+    if not RESULTS_PATH.exists():
+        return
+    df = pd.read_csv(RESULTS_PATH, encoding="utf-8")
+    mask = (
+        (df["student_id"].astype(str).str.strip() == student_id)
+        & (df["quiz_session"].astype(str).str.strip() == quiz_session)
+    )
+    if not mask.any():
+        return
+    for q_idx, text in explanations.items():
+        col = f"q{q_idx}_explanation"
+        if col not in df.columns:
+            df[col] = ""
+        df.loc[mask, col] = text.strip()
+    df.to_csv(RESULTS_PATH, index=False, encoding="utf-8")
+
+
 def main():
     st.set_page_config(page_title="Kisiye Ozel Olasilik Quizi", page_icon="Q", layout="wide")
     inject_styles()
@@ -1425,17 +1500,28 @@ def main():
         st.markdown("- Tolerans: +/- %5 (goreli)\n- Her soru 20 puan\n- Sorular ogrenciye ozeldir")
         teacher_view()
 
-    quiz_open, quiz_message, quiz_control = evaluate_quiz_availability(load_quiz_control())
+    quiz_phase, quiz_message, quiz_control = evaluate_quiz_availability(load_quiz_control())
     active_session = str(quiz_control.get("active_session") or "")
-    if not quiz_open:
+    if quiz_phase == "closed":
         st.warning(quiz_message)
         st.stop()
 
-    st.info(
-        f"Aktif quiz oturumu: {active_session} | "
-        f"Baslangic: {format_dt_for_ui(quiz_control['session_start'])} | "
-        f"Bitis: {format_dt_for_ui(quiz_control['session_end'])}"
-    )
+    # Faz bilgisi
+    if quiz_phase == "quiz":
+        st.info(
+            f"Aktif quiz oturumu: {active_session} | "
+            f"Baslangic: {format_dt_for_ui(quiz_control['session_start'])} | "
+            f"Quiz bitis: {format_dt_for_ui(quiz_control['session_end'])}"
+        )
+        now = now_in_app_timezone()
+        end_at = parse_iso_datetime(quiz_control["session_end"])
+        if end_at is not None and now < end_at:
+            remaining = max(1, math.ceil((end_at - now).total_seconds() / 60))
+            st.caption(f"Cevap suresi kalan: ~{remaining} dk | "
+                       f"Saat dilimi: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now)}")
+    elif quiz_phase == "comment":
+        st.warning(quiz_message)
+
     st.caption(f"Baz alinan saat dilimi: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now_in_app_timezone())}")
 
     student_name = st.text_input("Ad Soyad")
@@ -1468,73 +1554,140 @@ def main():
         st.info("Lutfen ogretmeninizi seciniz.")
         st.stop()
 
-    existing_submission = get_existing_submission(student_id_clean, active_session)
-    if existing_submission is not None:
-        st.error("Bu oturumda daha once teslim yaptiniz. Tekrar puan degistiremezsiniz.")
-        if pd.notna(existing_submission.get("score")):
-            st.info(f"Kayitli puaniniz: {int(float(existing_submission['score']))}/100")
-        st.stop()
-
     questions = question_bank(student_id_clean, active_session)
 
-    answers: list[dict[str, Any]] = []
-    cols = st.columns(2, gap="large")
-    for idx, q in enumerate(questions, start=1):
-        with cols[(idx - 1) % 2]:
-            render_question_card(q["title"], q["text"], idx)
-            user_value = st.number_input(
-                "Cevabin (0-1 arasi)",
-                key=f"ans_{idx}",
-                min_value=0.0,
-                max_value=1.0,
-                step=0.001,
-                format="%.4f",
-            )
-            explanation = st.text_area(
-                "Cozumunu 2-3 satirla acikla",
-                key=f"exp_{idx}",
-                height=88,
-                placeholder="Kullandiginiz formul ve adimlari kisaca yazin.",
-            )
-            answers.append(
-                {
-                    "given": user_value,
-                    "correct": q["answer"],
-                    "tolerance": q["tolerance"],
-                    "explanation": explanation.strip(),
-                }
-            )
-
-            fig = render_question_visual(q)
-            if fig is not None:
-                st.pyplot(fig, clear_figure=True, width="stretch")
-                plt.close(fig)
-
-    if st.button("Cevaplari Gonder ve Puanla", type="primary"):
-        if get_existing_submission(student_id_clean, active_session) is not None:
-            st.error("Bu oturum icin kaydiniz zaten alinmis.")
+    # ================================================================
+    # FAZ 1: QUIZ — sadece sayisal cevap, telefona minimum dokunma
+    # ================================================================
+    if quiz_phase == "quiz":
+        existing_submission = get_existing_submission(student_id_clean, active_session)
+        if existing_submission is not None:
+            st.error("Bu oturumda daha once teslim yaptiniz. Quiz suresi bittiginde yorumlarinizi yazabilirsiniz.")
+            if pd.notna(existing_submission.get("score")):
+                st.info(f"Kayitli puaniniz: {int(float(existing_submission['score']))}/100")
             st.stop()
 
+        st.markdown(
+            "> **Quiz Asamasi:** Sadece sayisal cevaplari giriniz. "
+            "Quiz suresi bittikten sonra aciklama/yorum yazmak icin ek sure verilecektir."
+        )
 
-        scored: list[dict[str, Any]] = []
-        score = 0
-        for ans, q in zip(answers, questions):
-            ok = check_answer(ans["given"], q["answer"], q["tolerance"])
-            scored_item = {
-                "given": ans["given"],
-                "correct": q["answer"],
-                "is_correct": ok,
-                "explanation": ans.get("explanation", ""),
-            }
-            scored.append(scored_item)
-            if ok:
-                score += 20
+        answers: list[dict[str, Any]] = []
+        cols = st.columns(2, gap="large")
+        for idx, q in enumerate(questions, start=1):
+            with cols[(idx - 1) % 2]:
+                render_question_card(q["title"], q["text"], idx)
+                user_value = st.number_input(
+                    "Cevabin (0-1 arasi)",
+                    key=f"ans_{idx}",
+                    min_value=0.0,
+                    max_value=1.0,
+                    step=0.001,
+                    format="%.4f",
+                )
+                answers.append(
+                    {
+                        "given": user_value,
+                        "correct": q["answer"],
+                        "tolerance": q["tolerance"],
+                        "explanation": "",
+                    }
+                )
 
-        st.success(f"Toplam puan: {score}/100")
-        st.info("Sonucunuz kaydedildi. Guvenlik nedeniyle dogru cevaplar ogrenci ekraninda gosterilmez.")
+                fig = render_question_visual(q)
+                if fig is not None:
+                    st.pyplot(fig, clear_figure=True, width="stretch")
+                    plt.close(fig)
 
-        record_result(student_id_clean, student_name_clean, teacher_name_clean, active_session, score, scored)
-        st.balloons()
+        confirm_submit = st.checkbox(
+            "Cevaplarimi gondermek istedigime eminim. (Gonderdikten sonra degistiremezsiniz.)",
+            key="confirm_submit_checkbox",
+        )
+        if st.button("Cevaplari Gonder ve Puanla", type="primary", disabled=not confirm_submit):
+            if get_existing_submission(student_id_clean, active_session) is not None:
+                st.error("Bu oturum icin kaydiniz zaten alinmis.")
+                st.stop()
+
+            scored: list[dict[str, Any]] = []
+            score = 0
+            for ans, q in zip(answers, questions):
+                ok = check_answer(ans["given"], q["answer"], q["tolerance"])
+                scored_item = {
+                    "given": ans["given"],
+                    "correct": q["answer"],
+                    "is_correct": ok,
+                    "explanation": "",
+                }
+                scored.append(scored_item)
+                if ok:
+                    score += 20
+
+            st.success(f"Toplam puan: {score}/100")
+            st.info("Sonucunuz kaydedildi. Quiz suresi bittikten sonra aciklama/yorum yazabileceksiniz.")
+
+            record_result(student_id_clean, student_name_clean, teacher_name_clean, active_session, score, scored)
+            st.balloons()
+
+    # ================================================================
+    # FAZ 2: YORUM — cevaplar kilitli, aciklama kutulari acik
+    # ================================================================
+    elif quiz_phase == "comment":
+        existing_submission = get_existing_submission(student_id_clean, active_session)
+        if existing_submission is None:
+            st.error("Quiz surecinde cevap gondermediniz. Yorum asamasinda yeni cevap kabul edilmez.")
+            st.stop()
+
+        if pd.notna(existing_submission.get("score")):
+            st.info(f"Kayitli puaniniz: {int(float(existing_submission['score']))}/100")
+
+        st.markdown(
+            "> **Yorum Asamasi:** Quiz suresi doldu. Cevaplarin kilitlenmistir. "
+            "Asagida her soru icin cozum aciklamanizi yazabilirsiniz."
+        )
+
+        explanations: dict[int, str] = {}
+        cols = st.columns(2, gap="large")
+        for idx, q in enumerate(questions, start=1):
+            with cols[(idx - 1) % 2]:
+                render_question_card(q["title"], q["text"], idx)
+
+                # Kilitli cevap gosterimi
+                given_val = existing_submission.get(f"q{idx}_given")
+                if pd.notna(given_val):
+                    st.text_input(
+                        f"Soru {idx} cevabin (kilitli)",
+                        value=f"{float(given_val):.4f}",
+                        disabled=True,
+                        key=f"locked_ans_{idx}",
+                    )
+                else:
+                    st.text_input(
+                        f"Soru {idx} cevabin (kilitli)",
+                        value="—",
+                        disabled=True,
+                        key=f"locked_ans_{idx}",
+                    )
+
+                # Onceki aciklama varsa goster
+                prev_exp = str(existing_submission.get(f"q{idx}_explanation") or "")
+                explanation = st.text_area(
+                    "Cozumunu 2-3 satirla acikla",
+                    key=f"exp_{idx}",
+                    height=88,
+                    value=prev_exp if prev_exp else "",
+                    placeholder="Kullandiginiz formul ve adimlari kisaca yazin.",
+                )
+                explanations[idx] = explanation.strip()
+
+                fig = render_question_visual(q)
+                if fig is not None:
+                    st.pyplot(fig, clear_figure=True, width="stretch")
+                    plt.close(fig)
+
+        if st.button("Yorumlari Kaydet", type="primary"):
+            _update_explanations(student_id_clean, active_session, explanations)
+            st.success("Yorumlariniz kaydedildi!")
+            st.balloons()
 
 
 if __name__ == "__main__":
