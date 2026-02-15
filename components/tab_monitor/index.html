@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tab Monitor</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+      background: transparent;
+    }
+  </style>
+</head>
+<body>
+  <script>
+    (function () {
+      "use strict";
+
+      var violated = false;
+      var violationEmitted = false;
+      var storageKey = "";
+      var currentScope = "";
+
+      function post(type, payload) {
+        var msg = Object.assign(
+          {
+            isStreamlitMessage: true,
+            type: type
+          },
+          payload || {}
+        );
+        window.parent.postMessage(msg, "*");
+      }
+
+      function setComponentValue(value) {
+        post("streamlit:setComponentValue", { value: value });
+      }
+
+      function setFrameHeight(height) {
+        post("streamlit:setFrameHeight", { height: height });
+      }
+
+      function buildScope(args) {
+        var sid = String((args && args.student_id) || "").trim();
+        var sessionId = String((args && args.quiz_session) || "").trim();
+        return sessionId + "::" + sid;
+      }
+
+      function resetScope(scope) {
+        currentScope = scope;
+        storageKey = "QUIZ_TAB_VIOLATION::" + scope;
+        violated = false;
+        violationEmitted = false;
+      }
+
+      function readStoredViolation() {
+        if (!storageKey) {
+          return null;
+        }
+        try {
+          var raw = window.localStorage.getItem(storageKey);
+          if (!raw) {
+            return null;
+          }
+          var parsed = JSON.parse(raw);
+          if (parsed && parsed.violated === true) {
+            return parsed;
+          }
+        } catch (err) {
+          return null;
+        }
+        return null;
+      }
+
+      function markViolation(reason) {
+        if (violated || !currentScope || currentScope === "::") {
+          return;
+        }
+        violated = true;
+        var payload = {
+          violated: true,
+          reason: reason,
+          timestamp: new Date().toISOString()
+        };
+        try {
+          window.localStorage.setItem(storageKey, JSON.stringify(payload));
+        } catch (err) {
+          // localStorage engellenirse sadece Streamlit'e bildir.
+        }
+        if (!violationEmitted) {
+          setComponentValue(payload);
+          violationEmitted = true;
+        }
+      }
+
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "hidden") {
+          markViolation("visibility_hidden");
+        }
+      });
+
+      window.addEventListener("pagehide", function () {
+        markViolation("pagehide");
+      });
+
+      window.addEventListener("message", function (event) {
+        var data = event.data;
+        if (!data || data.type !== "streamlit:render") {
+          return;
+        }
+        var args = data.args || {};
+        var nextScope = buildScope(args);
+        if (nextScope !== currentScope) {
+          resetScope(nextScope);
+        }
+
+        if (!violated) {
+          var stored = readStoredViolation();
+          if (stored) {
+            violated = true;
+            if (!violationEmitted) {
+              setComponentValue(stored);
+              violationEmitted = true;
+            }
+          }
+        }
+        setFrameHeight(0);
+      });
+
+      post("streamlit:componentReady", { apiVersion: 1 });
+      setFrameHeight(0);
+    })();
+  </script>
+</body>
+</html>

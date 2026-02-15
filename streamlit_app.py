@@ -26,19 +26,23 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import pandas as pd
 import qrcode
 import streamlit as st
+import streamlit.components.v1 as components
 from matplotlib import patches
 from matplotlib import pyplot as plt
 
 ENV_PATH = Path(".env")
+TAB_MONITOR_COMPONENT_PATH = Path(__file__).resolve().parent / "components" / "tab_monitor"
 TEACHER_CODE_HASH_KEY = "TEACHER_CODE_HASH"
 TEACHER_CODE_KEY = "TEACHER_CODE"
 PUBLIC_BASE_URL_KEY = "PUBLIC_BASE_URL"
 APP_TIMEZONE_KEY = "APP_TIMEZONE"
 DEFAULT_APP_TIMEZONE = "Europe/Istanbul"
+QUIZ_DURATION_OPTIONS = [1, 3, 5, 10, 15, 20, 30]
 TEACHER_OPTIONS = [
     "Prof. Dr. Yalçın ATA",
     "Prof. Dr. Arif DEMİR",
     "Dr. Öğr. Üyesi Emel GÜVEN",
+    "Dr. Öğr. Üyesi Haydar KILIÇ",
     "Dr. Öğr. Üyesi Ufuk ASIL",
     "Öğr. Gör. Sema ÇİFTÇİ",
 ]
@@ -53,7 +57,13 @@ DEFAULT_QUIZ_CONTROL: dict[str, Any] = {
     "session_start": "",
     "session_end": "",
     "comment_end": "",
+    "quiz_duration_minutes": 0,
+    "tab_violation_enabled": True,
 }
+TAB_MONITOR_COMPONENT = components.declare_component(
+    "tab_monitor",
+    path=str(TAB_MONITOR_COMPONENT_PATH),
+)
 
 
 def _now_iso() -> str:
@@ -480,6 +490,12 @@ def load_quiz_control() -> dict[str, Any]:
     control["session_start"] = str(control.get("session_start") or "")
     control["session_end"] = str(control.get("session_end") or "")
     control["comment_end"] = str(control.get("comment_end") or "")
+    raw_duration = control.get("quiz_duration_minutes", 0)
+    try:
+        control["quiz_duration_minutes"] = max(0, int(raw_duration))
+    except (TypeError, ValueError):
+        control["quiz_duration_minutes"] = 0
+    control["tab_violation_enabled"] = bool(control.get("tab_violation_enabled", True))
     return control
 
 
@@ -494,6 +510,8 @@ def save_quiz_control(control: dict[str, Any]) -> None:
         "session_start": str(control.get("session_start") or ""),
         "session_end": str(control.get("session_end") or ""),
         "comment_end": str(control.get("comment_end") or ""),
+        "quiz_duration_minutes": max(0, int(control.get("quiz_duration_minutes", 0))),
+        "tab_violation_enabled": bool(control.get("tab_violation_enabled", True)),
     }
     QUIZ_CONTROL_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -1139,9 +1157,19 @@ def teacher_view():
     if control["is_open"] and control["active_session"]:
         st.success(f"Durum: ACIK | Oturum: {control['active_session']}")
         st.caption(f"Baslangic: {format_dt_for_ui(control['session_start'])}")
-        st.caption(f"Quiz bitis: {format_dt_for_ui(control['session_end'])}")
-        if control.get("comment_end"):
-            st.caption(f"Yorum bitis: {format_dt_for_ui(control['comment_end'])}")
+        duration_minutes = int(control.get("quiz_duration_minutes", 0) or 0)
+        if duration_minutes <= 0:
+            start_at_for_duration = parse_iso_datetime(control["session_start"])
+            end_at_for_duration = parse_iso_datetime(control["session_end"])
+            if start_at_for_duration is not None and end_at_for_duration is not None and end_at_for_duration > start_at_for_duration:
+                duration_minutes = max(
+                    1,
+                    int(round((end_at_for_duration - start_at_for_duration).total_seconds() / 60)),
+                )
+        if duration_minutes > 0:
+            st.caption(f"Quiz suresi: {duration_minutes} dakika")
+        tab_rule_state = "Acik" if bool(control.get("tab_violation_enabled", True)) else "Kapali"
+        st.caption(f"Sekme degisikligi cezasi: {tab_rule_state}")
         if control["opened_at"]:
             st.caption(f"Acilis zamani: {format_dt_for_ui(control['opened_at'])}")
 
@@ -1174,35 +1202,50 @@ def teacher_view():
         if control["closed_at"]:
             st.caption(f"Son kapanis zamani: {format_dt_for_ui(control['closed_at'])}")
 
-        default_start = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
-        default_end = default_start + timedelta(minutes=45)
+        default_start = now.replace(second=0, microsecond=0)
+        default_duration_minutes = 15
         default_start_time = default_start.time().replace(tzinfo=None)
-        default_end_time = default_end.time().replace(tzinfo=None)
         with st.expander("Yeni Oturum Zaman Penceresi", expanded=True):
             start_date = st.date_input("Baslangic tarihi", value=default_start.date(), key="session_start_date")
-            start_time = st.time_input("Baslangic saati", value=default_start_time, key="session_start_time")
-            end_date = st.date_input("Bitis tarihi", value=default_end.date(), key="session_end_date")
-            end_time = st.time_input("Bitis saati", value=default_end_time, key="session_end_time")
+            start_time = st.time_input(
+                "Baslangic saati",
+                value=default_start_time,
+                key="session_start_time",
+                step=timedelta(minutes=1),
+            )
+            selected_duration = st.selectbox(
+                "Sunum/Quiz suresi (dk)",
+                options=QUIZ_DURATION_OPTIONS,
+                index=QUIZ_DURATION_OPTIONS.index(default_duration_minutes),
+                key="quiz_duration_select",
+            )
+            tab_violation_enabled = st.toggle(
+                "Sekme/uygulama degisikligi tespiti aktif (ihlalde quiz sonlansin)",
+                value=True,
+                key="tab_violation_toggle",
+            )
             comment_minutes = st.number_input(
                 "Yorum suresi (dk) — Quiz bittikten sonra aciklama yazma icin ek sure",
                 min_value=0,
                 max_value=60,
-                value=10,
+                value=5,
                 step=1,
                 key="comment_duration_input",
             )
 
         tz, _, _ = resolve_app_timezone()
         start_at = datetime.combine(start_date, start_time).replace(tzinfo=tz)
-        end_at = datetime.combine(end_date, end_time).replace(tzinfo=tz)
+        end_at = start_at + timedelta(minutes=int(selected_duration))
         comment_end_at = end_at + timedelta(minutes=comment_minutes) if comment_minutes > 0 else None
         st.caption(f"Secilen baslangic: {format_dt_obj_for_ui(start_at)}")
-        st.caption(f"Secilen quiz bitis: {format_dt_obj_for_ui(end_at)}")
+        st.caption(f"Secilen sunum/quiz suresi: {selected_duration} dakika")
+        st.caption(
+            "Sekme degisikligi cezasi: "
+            + ("Acik (ihlalde quiz sonlanir)" if tab_violation_enabled else "Kapali")
+        )
         if comment_end_at:
             st.caption(f"Secilen yorum bitis: {format_dt_obj_for_ui(comment_end_at)}")
-        if end_at <= start_at:
-            st.error("Bitis zamani, baslangic zamanindan sonra olmalidir.")
-        elif st.button("Quizi Ac (Yeni Oturum)", type="primary", use_container_width=True, key="open_quiz_btn"):
+        if st.button("Quizi Ac (Yeni Oturum)", type="primary", use_container_width=True, key="open_quiz_btn"):
             save_quiz_control(
                 {
                     "is_open": True,
@@ -1212,6 +1255,8 @@ def teacher_view():
                     "session_start": start_at.isoformat(timespec="seconds"),
                     "session_end": end_at.isoformat(timespec="seconds"),
                     "comment_end": comment_end_at.isoformat(timespec="seconds") if comment_end_at else "",
+                    "quiz_duration_minutes": int(selected_duration),
+                    "tab_violation_enabled": bool(tab_violation_enabled),
                 }
             )
             rerun_app()
@@ -1374,6 +1419,13 @@ def inject_styles():
             --muted: #cbd5e1;
             --edge: rgba(255,255,255,0.12);
             --glass: rgba(255,255,255,0.07);
+            --background-color: #0b132b;
+            --secondary-background-color: #121f40;
+            --text-color: #f8fafc;
+            --primary-color: #60a5fa;
+        }
+        html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
+            color-scheme: dark !important;
         }
         html, body, [class*="css"]  {
             font-family: 'Space Grotesk', sans-serif;
@@ -1413,6 +1465,27 @@ def inject_styles():
         }
         [data-testid="stSidebar"] ::-webkit-scrollbar-track {
             background: rgba(255, 255, 255, 0.06);
+        }
+        .stTextInput input,
+        .stNumberInput input,
+        .stTextArea textarea,
+        .stDateInput input,
+        .stTimeInput input,
+        .stSelectbox div[data-baseweb="select"] > div,
+        .stMultiSelect div[data-baseweb="select"] > div {
+            background: rgba(15, 23, 42, 0.92) !important;
+            color: #f8fafc !important;
+            border-color: rgba(255, 255, 255, 0.20) !important;
+        }
+        .stCheckbox label, .stRadio label, .stSelectbox label,
+        .stTextInput label, .stNumberInput label, .stDateInput label, .stTimeInput label, .stTextArea label {
+            color: #f8fafc !important;
+        }
+        .stAlert, .stInfo, .stSuccess, .stWarning, .stError {
+            color: #f8fafc !important;
+        }
+        [data-testid="stHeader"] {
+            background: rgba(11, 19, 43, 0.88) !important;
         }
         /* ==== OCR/VLM Kalkan Stilleri (K1-K8) ==== */
         .ocr-w { display:inline-block; position:relative; user-select:text; line-height:1; }
@@ -1463,6 +1536,26 @@ def inject_styles():
                 -0.3px 0.4px 0px rgba(100,180,255,0.06),
                 0.2px -0.3px 0px rgba(150,255,130,0.05);
         }
+        /* Tab-switch violation banner */
+        .tab-violation-banner {
+            background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
+            border: 2px solid #fca5a5;
+            border-radius: 12px;
+            padding: 24px;
+            margin: 20px 0;
+            text-align: center;
+            box-shadow: 0 8px 32px rgba(220, 38, 38, 0.4);
+        }
+        .tab-violation-banner h2 {
+            color: #fff;
+            margin: 0 0 8px 0;
+            font-size: 1.4rem;
+        }
+        .tab-violation-banner p {
+            color: #fecaca;
+            margin: 0;
+            font-size: 1rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1486,6 +1579,63 @@ def _update_explanations(student_id: str, quiz_session: str, explanations: dict[
             df[col] = ""
         df.loc[mask, col] = text.strip()
     df.to_csv(RESULTS_PATH, index=False, encoding="utf-8")
+
+
+# ══════════════════════════════════════════════════════════════════
+# SEKME / UYGULAMA DEGİSİKLİGİ TESPİT SİSTEMİ
+# ══════════════════════════════════════════════════════════════════
+
+def _check_tab_violation(student_id: str, quiz_session: str) -> bool:
+    """Custom component'ten gelen sekme ihlali bilgisini okur."""
+    payload = TAB_MONITOR_COMPONENT(
+        student_id=student_id.strip(),
+        quiz_session=quiz_session.strip(),
+        key=f"tab_monitor_{quiz_session.strip()}_{student_id.strip()}",
+        default={"violated": False},
+    )
+    if isinstance(payload, dict):
+        return bool(payload.get("violated"))
+    return bool(payload)
+
+
+def _record_tab_violation(
+    student_id: str,
+    student_name: str,
+    teacher_name: str,
+    quiz_session: str,
+    questions: list[dict[str, Any]],
+) -> None:
+    """Sekme degisikligi ihlalini 0 puanla CSV'ye kaydeder."""
+    scored: list[dict[str, Any]] = []
+    for q in questions:
+        scored.append({
+            "given": 0.0,
+            "correct": q["answer"],
+            "is_correct": False,
+            "explanation": "[IHLAL] Ekran/sekme degisikligi - quiz otomatik sonlandirildi.",
+        })
+    record_result(student_id, student_name, teacher_name, quiz_session, 0, scored)
+
+
+def _render_violation_block() -> None:
+    """Ihlal durumunda ogrenciye gosterilen uyari blogu."""
+    st.markdown(
+        """
+        <div class="tab-violation-banner">
+            <h2>&#9888; Quiziniz Sonlandirildi</h2>
+            <p>
+                Quiz sirasinda baska bir uygulamaya veya sekmeye gectiginiz tespit edildi.<br>
+                Kopya ihtimaline karsi quiziniz <strong>0 puan</strong> olarak kaydedilmistir.<br>
+                Bu durum ogretmeninize bildirilmistir.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.error(
+        "Quiz kurallarina gore ekran/sekme degisikligi yapmaniz durumunda "
+        "quiziniz otomatik olarak sonlandirilir ve 0 puan kaydedilir."
+    )
 
 
 def main():
@@ -1560,6 +1710,35 @@ def main():
     # FAZ 1: QUIZ — sadece sayisal cevap, telefona minimum dokunma
     # ================================================================
     if quiz_phase == "quiz":
+        tab_violation_enabled = bool(quiz_control.get("tab_violation_enabled", True))
+        violation_scope = f"{active_session}:{student_id_clean}"
+        if st.session_state.get("_tab_violation_scope") != violation_scope:
+            st.session_state["_tab_violation"] = False
+            st.session_state["_tab_violation_scope"] = violation_scope
+
+        # --- Sekme/uygulama degisikligi kontrolu ---
+        if tab_violation_enabled:
+            tab_violated = _check_tab_violation(student_id_clean, active_session)
+            if tab_violated:
+                # Session state'e kaydet (kalici)
+                st.session_state["_tab_violation"] = True
+        else:
+            st.session_state["_tab_violation"] = False
+
+        if st.session_state.get("_tab_violation"):
+            # Ihlal varsa: once kayit kontrol et, kayit yoksa 0 puan yaz
+            existing_submission = get_existing_submission(student_id_clean, active_session)
+            if existing_submission is None:
+                _record_tab_violation(
+                    student_id_clean,
+                    student_name_clean,
+                    teacher_name_clean,
+                    active_session,
+                    questions,
+                )
+            _render_violation_block()
+            st.stop()
+
         existing_submission = get_existing_submission(student_id_clean, active_session)
         if existing_submission is not None:
             st.error("Bu oturumda daha once teslim yaptiniz. Quiz suresi bittiginde yorumlarinizi yazabilirsiniz.")
@@ -1567,10 +1746,18 @@ def main():
                 st.info(f"Kayitli puaniniz: {int(float(existing_submission['score']))}/100")
             st.stop()
 
-        st.markdown(
-            "> **Quiz Asamasi:** Sadece sayisal cevaplari giriniz. "
-            "Quiz suresi bittikten sonra aciklama/yorum yazmak icin ek sure verilecektir."
-        )
+        if tab_violation_enabled:
+            st.markdown(
+                "> **Quiz Asamasi:** Sadece sayisal cevaplari giriniz. "
+                "Quiz suresi bittikten sonra aciklama/yorum yazmak icin ek sure verilecektir.\n\n"
+                "> &#9888; **Uyari:** Quiz sirasinda baska bir uygulamaya veya sekmeye gecerseniz "
+                "quiziniz **otomatik olarak sonlandirilir** ve **0 puan** kaydedilir."
+            )
+        else:
+            st.markdown(
+                "> **Quiz Asamasi:** Sadece sayisal cevaplari giriniz. "
+                "Quiz suresi bittikten sonra aciklama/yorum yazmak icin ek sure verilecektir."
+            )
 
         answers: list[dict[str, Any]] = []
         cols = st.columns(2, gap="large")
