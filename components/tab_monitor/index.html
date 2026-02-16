@@ -24,6 +24,9 @@
       var violationEmitted = false;
       var storageKey = "";
       var currentScope = "";
+      var monitorEnabled = true;
+      var deadlineTimer = null;
+      var deadlineFiredScope = "";
 
       function post(type, payload) {
         var msg = Object.assign(
@@ -51,10 +54,15 @@
       }
 
       function resetScope(scope) {
+        if (deadlineTimer) {
+          window.clearTimeout(deadlineTimer);
+          deadlineTimer = null;
+        }
         currentScope = scope;
         storageKey = "QUIZ_TAB_VIOLATION::" + scope;
         violated = false;
         violationEmitted = false;
+        deadlineFiredScope = "";
       }
 
       function readStoredViolation() {
@@ -77,7 +85,7 @@
       }
 
       function markViolation(reason) {
-        if (violated || !currentScope || currentScope === "::") {
+        if (!monitorEnabled || violated || !currentScope || currentScope === "::") {
           return;
         }
         violated = true;
@@ -95,6 +103,46 @@
           setComponentValue(payload);
           violationEmitted = true;
         }
+      }
+
+      function scheduleDeadlineTick(deadlineIso, tickScope) {
+        if (deadlineTimer) {
+          window.clearTimeout(deadlineTimer);
+          deadlineTimer = null;
+        }
+
+        if (!tickScope || !deadlineIso) {
+          return;
+        }
+
+        var deadlineMs = Date.parse(deadlineIso);
+        if (!Number.isFinite(deadlineMs)) {
+          return;
+        }
+
+        var delayMs = deadlineMs - Date.now();
+        var emitTick = function () {
+          if (deadlineFiredScope === tickScope) {
+            return;
+          }
+          deadlineFiredScope = tickScope;
+          setComponentValue({
+            violated: violated,
+            deadline_reached: true,
+            deadline_iso: deadlineIso,
+            timestamp: new Date().toISOString()
+          });
+        };
+
+        if (delayMs <= 0) {
+          emitTick();
+          return;
+        }
+        if (delayMs > 6 * 60 * 60 * 1000) {
+          return;
+        }
+
+        deadlineTimer = window.setTimeout(emitTick, delayMs + 120);
       }
 
       document.addEventListener("visibilitychange", function () {
@@ -117,8 +165,11 @@
         if (nextScope !== currentScope) {
           resetScope(nextScope);
         }
+        monitorEnabled = args.monitor_enabled !== false;
+        var deadlineIso = String((args && args.deadline_iso) || "").trim();
+        scheduleDeadlineTick(deadlineIso, nextScope + "::" + deadlineIso);
 
-        if (!violated) {
+        if (monitorEnabled && !violated) {
           var stored = readStoredViolation();
           if (stored) {
             violated = true;

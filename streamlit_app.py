@@ -1272,7 +1272,7 @@ def evaluate_quiz_availability(control: dict[str, Any]) -> tuple[str, str, dict[
         normalized["is_open"] = False
         normalized["closed_at"] = _now_iso()
         save_quiz_control(normalized)
-        return "closed", "Quiz ve yorum süresi doldu. Oturum otomatik kapatıldı.", normalized
+        return "closed", "Quiz sonlandı. Quiz ve yorum süresi doldu. Oturum otomatik kapatıldı.", normalized
 
     active_session = str(normalized.get("active_session") or "")
     if not normalized.get("is_open") or not active_session:
@@ -1300,11 +1300,11 @@ def evaluate_quiz_availability(control: dict[str, Any]) -> tuple[str, str, dict[
             mins = max(1, math.ceil(remaining / 60))
             return (
                 "comment",
-                f"Quiz süresi doldu. Yorum yazma süresi devam ediyor (kalan: ~{mins} dk).",
+                f"Quiz sonlandı. Yorum yazma süresi devam ediyor (kalan: ~{mins} dk).",
                 normalized,
             )
         # comment_end yoksa veya o da dolduysa kapalı (yukaridaki blokta yakalanir ama guvenlik için)
-        return "closed", "Quiz süresi doldu.", normalized
+        return "closed", "Quiz sonlandı. Süre doldu.", normalized
 
     return "quiz", "", normalized
 
@@ -1871,11 +1871,19 @@ def _update_explanations(student_id: str, quiz_session: str, explanations: dict[
 # SEKME / UYGULAMA DEGİSİKLİGİ TESPİT SİSTEMİ
 # ══════════════════════════════════════════════════════════════════
 
-def _check_tab_violation(student_id: str, quiz_session: str) -> bool:
+def _check_tab_violation(
+    student_id: str,
+    quiz_session: str,
+    *,
+    deadline_at: datetime | None = None,
+    monitor_enabled: bool = True,
+) -> bool:
     """Custom component'ten gelen sekme ihlali bilgisini okur."""
     payload = TAB_MONITOR_COMPONENT(
         student_id=student_id.strip(),
         quiz_session=quiz_session.strip(),
+        monitor_enabled=bool(monitor_enabled),
+        deadline_iso=deadline_at.isoformat(timespec="seconds") if deadline_at else "",
         key=f"tab_monitor_{quiz_session.strip()}_{student_id.strip()}",
         default={"violated": False},
     )
@@ -2029,13 +2037,19 @@ def main():
             st.session_state["_tab_violation"] = False
             st.session_state["_tab_violation_scope"] = violation_scope
 
-        # --- Sekme/uygulama degisikligi kontrolu ---
-        if tab_violation_enabled:
-            tab_violated = _check_tab_violation(student_id_clean, active_session)
-            if tab_violated:
-                # Session state'e kaydet (kalici)
-                st.session_state["_tab_violation"] = True
-        else:
+        quiz_end_at = parse_iso_datetime(str(quiz_control.get("session_end") or ""))
+
+        # --- Sekme/uygulama degisikligi + sure sonu tetigi ---
+        tab_violated = _check_tab_violation(
+            student_id_clean,
+            active_session,
+            deadline_at=quiz_end_at,
+            monitor_enabled=tab_violation_enabled,
+        )
+        if tab_violation_enabled and tab_violated:
+            # Session state'e kaydet (kalici)
+            st.session_state["_tab_violation"] = True
+        elif not tab_violation_enabled:
             st.session_state["_tab_violation"] = False
 
         if st.session_state.get("_tab_violation"):
@@ -2135,6 +2149,15 @@ def main():
     # FAZ 2: YORUM — cevaplar kilitli, açıklama kutulari açık
     # ================================================================
     elif quiz_phase == "comment":
+        comment_end_at = parse_iso_datetime(str(quiz_control.get("comment_end") or ""))
+        if comment_end_at is not None:
+            _check_tab_violation(
+                student_id_clean,
+                active_session,
+                deadline_at=comment_end_at,
+                monitor_enabled=False,
+            )
+
         existing_submission = get_existing_submission(student_id_clean, active_session)
         if existing_submission is None:
             existing_submission = _auto_submit_expired_quiz_from_snapshot(
