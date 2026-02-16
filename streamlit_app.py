@@ -1,4 +1,4 @@
-# Çalıştırmak için terminale şu komutu yazınız: python -m streamlit run streamlit_app.py
+﻿# Ã‡alÄ±ÅŸtÄ±rmak iÃ§in terminale ÅŸu komutu yazÄ±nÄ±z: python -m streamlit run streamlit_app.py
 """
 Streamlit tabanlı, Öğrenci numarasina göre kişiselleştirilmiş 5 soruluk quiz.
 - Soru senaryolari 2-hafta-olasılık sunumundaki temalara dayanir.
@@ -37,6 +37,10 @@ TEACHER_CODE_KEY = "TEACHER_CODE"
 PUBLIC_BASE_URL_KEY = "PUBLIC_BASE_URL"
 APP_TIMEZONE_KEY = "APP_TIMEZONE"
 DEFAULT_APP_TIMEZONE = "Europe/Istanbul"
+APP_LANGUAGE_KEY = "APP_LANGUAGE"
+DEFAULT_UI_LANGUAGE = "tr"
+SUPPORTED_UI_LANGUAGES = ("tr", "en")
+UI_LANGUAGE_STATE_KEY = "_ui_language"
 QUIZ_DURATION_OPTIONS = [1, 3, 5, 10, 15, 20, 30]
 TEACHER_OPTIONS = [
     "Prof. Dr. Yalçın ATA",
@@ -44,6 +48,7 @@ TEACHER_OPTIONS = [
     "Dr. Öğr. Üyesi Emel GÜVEN",
     "Dr. Öğr. Üyesi Haydar KILIÇ",
     "Dr. Öğr. Üyesi Ufuk ASIL",
+    "Dr. Öğr. Üyesi Muhammed ELMNEFI",
     "Öğr. Gör. Sema ÇİFTÇİ",
 ]
 ANSWER_REL_TOL = 0.05
@@ -133,7 +138,7 @@ def get_secret_or_env(key: str) -> str:
 
 
 def get_teacher_code_hash() -> str:
-    """Öğretmen kod hash degerini alir (hash veya düz metin koddan)."""
+    """Öğretmen kod hash de?erini alir (hash veya düz metin koddan)."""
     raw_hash = get_secret_or_env(TEACHER_CODE_HASH_KEY).lower()
     if raw_hash:
         return raw_hash
@@ -145,8 +150,83 @@ def get_teacher_code_hash() -> str:
 
 
 def get_public_base_url() -> str:
-    """Public quiz URL degerini secrets, ortam veya .env dosyasindan alir."""
+    """Public quiz URL de?erini secrets, ortam veya .env dosyasindan alir."""
     return get_secret_or_env(PUBLIC_BASE_URL_KEY)
+
+
+def normalize_ui_language(value: Any) -> str:
+    """Desteklenen dil kodunu normalize eder."""
+    normalized = str(value or "").strip().lower()
+    if normalized in SUPPORTED_UI_LANGUAGES:
+        return normalized
+    return ""
+
+
+def _query_lang_param() -> str:
+    """URL query parametresinden lang de?erini okur."""
+    try:
+        raw = st.query_params.get("lang", "")
+    except Exception:
+        return ""
+    if isinstance(raw, list):
+        return str(raw[0] if raw else "")
+    return str(raw)
+
+
+def resolve_default_ui_language() -> str:
+    """Varsayilan arayuz dilini (query -> env -> default) belirler."""
+    from_query = normalize_ui_language(_query_lang_param())
+    if from_query:
+        return from_query
+    from_env = normalize_ui_language(get_secret_or_env(APP_LANGUAGE_KEY))
+    if from_env:
+        return from_env
+    return DEFAULT_UI_LANGUAGE
+
+
+def set_ui_language(language: str) -> str:
+    """Arayuz dilini session state ve URL query parametresine yazar."""
+    normalized = normalize_ui_language(language) or DEFAULT_UI_LANGUAGE
+    st.session_state[UI_LANGUAGE_STATE_KEY] = normalized
+    try:
+        current_query_lang = normalize_ui_language(st.query_params.get("lang", ""))
+        if current_query_lang != normalized:
+            st.query_params["lang"] = normalized
+    except Exception:
+        pass
+    return normalized
+
+
+def get_ui_language() -> str:
+    """Aktif arayuz dilini dondurur."""
+    from_state = normalize_ui_language(st.session_state.get(UI_LANGUAGE_STATE_KEY, ""))
+    if from_state:
+        return from_state
+    return set_ui_language(resolve_default_ui_language())
+
+
+def tr(tr_text: str, en_text: str, **kwargs: Any) -> str:
+    """Aktif dile g?re metin secimi yapar."""
+    text = en_text if get_ui_language() == "en" else tr_text
+    if kwargs:
+        return text.format(**kwargs)
+    return text
+
+
+def render_language_selector() -> str:
+    """Sidebar'da dil secimini g?sterir."""
+    options = [("Turkce (TR)", "tr"), ("English (EN)", "en")]
+    labels = [label for label, _ in options]
+    label_to_code = {label: code for label, code in options}
+    current = get_ui_language()
+    current_label = next((label for label, code in options if code == current), labels[0])
+    selected_label = st.selectbox(
+        "Dil / Language",
+        options=labels,
+        index=labels.index(current_label),
+        key="ui_language_select",
+    )
+    return set_ui_language(label_to_code[selected_label])
 
 
 def resolve_app_timezone() -> tuple[ZoneInfo, str, str]:
@@ -205,7 +285,7 @@ class OcrShieldRng:
         return ((t ^ (t >> 14)) & 0xFFFFFFFF) / 4294967296.0
 
 
-# ══════════════════════════════════════════════════════════════════
+# Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 # OCR / VLM KALKAN SİSTEMİ  (7 katman)
 # ──────────────────────────────────────────────────────────────────
 # K1 Homoglyph ikamesi       : Copy-paste / metin cikarmayi bozar
@@ -215,7 +295,7 @@ class OcrShieldRng:
 # K5 Kelime grubu bozma      : Rotation + dikey kayma + font-size
 # K6 Zero-width Unicode      : Gorunmez karakterler segmentasyonu bozar
 # K7 CSS gorsel gurultu      : text-shadow + pattern (CSS tarafinda)
-# ══════════════════════════════════════════════════════════════════
+# Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
 # K1: Gorunusu ayni, Unicode kod noktasi farklı -> copy-paste bozuk
 _HOMOGLYPHS = {
@@ -311,7 +391,7 @@ def _ocr_shield_text(text: str, rng: OcrShieldRng) -> str:
 
 def _extract_number(word: str) -> str | None:
     """Kelimeden sayı cikarir."""
-    stripped = word.strip(".,;:!?()[]{}\"'%")
+    stripped = word.strip(".,;:!()[]{}\"'%")
     if not stripped:
         return None
     try:
@@ -414,7 +494,7 @@ def _get_ocr_rng() -> OcrShieldRng | None:
 
 
 def is_teacher_code_configured() -> bool:
-    """Öğretmen kod hash ayarı var mı?"""
+    """Öğretmen kod hash ayarı var mı"""
     value = get_teacher_code_hash()
     return len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
 
@@ -454,7 +534,7 @@ def format_dt_for_ui(value: str) -> str:
 
 
 def auto_close_quiz_if_expired(control: dict[str, Any]) -> dict[str, Any]:
-    """Yorum süresi de dahil tum sureler dolduysa oturumu otomatik kapatir."""
+    """Yorum süresi de dahil tum s?reler dolduysa oturumu otomatik kapatir."""
     if not control.get("is_open"):
         return control
 
@@ -538,7 +618,7 @@ def load_results_df() -> pd.DataFrame:
 
 
 def clear_results_for_teacher(teacher_name: str) -> int:
-    """Seçilen ogretmene ait tum sonuc kayitlarini siler."""
+    """Seçilen ??retmene ait tum sonuc kay?tlarini siler."""
     if not RESULTS_PATH.exists():
         return 0
 
@@ -561,7 +641,7 @@ def clear_results_for_teacher(teacher_name: str) -> int:
 
 
 def get_existing_submission(student_id: str, quiz_session: str) -> dict[str, Any] | None:
-    """Ayni ogrencinin ayni oturumdaki kaydini bulur."""
+    """Ayni ??rencinin ayni oturumdaki kaydini bulur."""
     if not quiz_session:
         return None
 
@@ -600,22 +680,35 @@ def rng_from_student(student_id: str, quiz_session: str) -> random.Random:
     return random.Random(seed)
 
 
-def question_bank(student_id: str, quiz_session: str) -> list[dict[str, Any]]:
+def question_bank(
+    student_id: str,
+    quiz_session: str,
+    language: str = DEFAULT_UI_LANGUAGE,
+) -> list[dict[str, Any]]:
     """5 soruluk soru listesi."""
     r = rng_from_student(student_id, quiz_session)
     questions: list[dict[str, Any]] = []
+    is_en = normalize_ui_language(language) == "en"
 
-    # Q1 - Tekstil
+    # Q1 - Textile
     p_u = round(r.uniform(0.08, 0.14), 3)
     p_d = round(r.uniform(0.04, 0.08), 3)
     p_ud = round(r.uniform(max(0.005, 0.5 * min(p_u, p_d)), 0.9 * min(p_u, p_d)), 3)
     questions.append(
         {
-            "title": "Tekstil Fabrikası",
+            "title": "Textile Factory" if is_en else "Tekstil Fabrikası",
             "text": (
-                f"Uzunluk testinden kalma olasılığı P(U)={p_u:.3f}, doku hatası P(D)={p_d:.3f}, "
-                f"iki hatanın birlikte olasılığı P(U\u2229D)={p_ud:.3f}. "
-                "Uzunluk testinden kalan bir seridin doku hatalı olma olasılığı nedir (P(D|U))?"
+                (
+                    f"The probability of failing the length test is P(U)={p_u:.3f}, the probability of texture defect is P(D)={p_d:.3f}, "
+                    f"and the joint probability is P(U\u2229D)={p_ud:.3f}. "
+                    "What is the probability that a strip that failed the length test also has a texture defect (P(D|U))?"
+                )
+                if is_en
+                else (
+                    f"Uzunluk testinden kalma olasılığı P(U)={p_u:.3f}, doku hatası P(D)={p_d:.3f}, "
+                    f"iki hatanın birlikte olasılığı P(U\u2229D)={p_ud:.3f}. "
+                    "Uzunluk testinden kalan bir seridin doku hatalı olma olasılığı nedir (P(D|U))?"
+                )
             ),
             "answer": p_ud / p_u,
             "tolerance": ANSWER_REL_TOL,
@@ -630,17 +723,25 @@ def question_bank(student_id: str, quiz_session: str) -> list[dict[str, Any]]:
         }
     )
 
-    # Q2 - Arac bakim
+    # Q2 - Vehicle maintenance
     p_y = round(r.uniform(0.20, 0.32), 3)
     p_f = round(r.uniform(0.32, 0.50), 3)
     p_yf = round(r.uniform(max(0.06, 0.4 * min(p_y, p_f)), 0.9 * min(p_y, p_f)), 3)
     questions.append(
         {
-            "title": "Araç Bakım Servisi",
+            "title": "Vehicle Service" if is_en else "Araç Bakım Servisi",
             "text": (
-                f"Yağ değişimi olasılığı P(Y)={p_y:.3f}, filtre değişimi olasılığı P(F)={p_f:.3f}, "
-                f"birlikte olasılık P(Y\u2229F)={p_yf:.3f}. "
-                "Yağ değişimi gereken aracın filtre değişimine de ihtiyacı olma olasılığı nedir (P(F|Y))?"
+                (
+                    f"The probability of oil change is P(Y)={p_y:.3f}, the probability of filter change is P(F)={p_f:.3f}, "
+                    f"and the joint probability is P(Y\u2229F)={p_yf:.3f}. "
+                    "What is the probability that a vehicle requiring oil change also requires filter change (P(F|Y))?"
+                )
+                if is_en
+                else (
+                    f"Yağ değişimi olasılığı P(Y)={p_y:.3f}, filtre değişimi olasılığı P(F)={p_f:.3f}, "
+                    f"birlikte olasılık P(Y\u2229F)={p_yf:.3f}. "
+                    "Yağ değişimi gereken bir aracın filtre değişimine de ihtiyacı olma olasılığı nedir (P(F|Y))?"
+                )
             ),
             "answer": p_yf / p_y,
             "tolerance": ANSWER_REL_TOL,
@@ -655,17 +756,24 @@ def question_bank(student_id: str, quiz_session: str) -> list[dict[str, Any]]:
         }
     )
 
-    # Q3 - Öğrenci anketi
+    # Q3 - Student survey
     total = 500
     smokers = r.randint(170, 260)
     alcohol = r.randint(220, 290)
     both = r.randint(int(0.4 * min(smokers, alcohol)), int(0.75 * min(smokers, alcohol)))
     questions.append(
         {
-            "title": "Öğrenci Anketi",
+            "title": "Student Survey" if is_en else "Öğrenci Anketi",
             "text": (
-                f"{total} kişilik sınıfta sigara içen sayısı {smokers}, alkol kullanan sayısı {alcohol}, "
-                f"her ikisi {both}. Alkol kullanan bir öğrencinin sigara da içme olasılığı nedir (P(S|A))?"
+                (
+                    f"In a class of {total} students, {smokers} students smoke, {alcohol} students consume alcohol, "
+                    f"and {both} students do both. What is the probability that an alcohol-consuming student also smokes (P(S|A))?"
+                )
+                if is_en
+                else (
+                    f"{total} kişilik sınıfta sigara içen sayısı {smokers}, alkol kullanan sayısı {alcohol}, "
+                    f"her ikisi {both}. Alkol kullanan bir öğrencinin sigara da içme olasılığı nedir (P(S|A))?"
+                )
             ),
             "answer": both / alcohol,
             "tolerance": ANSWER_REL_TOL,
@@ -681,15 +789,22 @@ def question_bank(student_id: str, quiz_session: str) -> list[dict[str, Any]]:
         }
     )
 
-    # Q4 - Serum üretimi
+    # Q4 - Serum production flow
     r1 = round(r.uniform(0.08, 0.14), 3)
     r2 = round(r.uniform(0.06, 0.12), 3)
     questions.append(
         {
-            "title": "Serum Kalite Kontrol",
+            "title": "Serum Quality Control" if is_en else "Serum Kalite Kontrol",
             "text": (
-                f"Reddetme oranları r1={r1:.3f}, r2={r2:.3f}. "
-                "Bir partinin 1. departmanı geçip 2. departmanda reddedilme olasılığı nedir?"
+                (
+                    f"Rejection rates are r1={r1:.3f} and r2={r2:.3f}. "
+                    "What is the probability that a batch passes department 1 and is rejected in department 2?"
+                )
+                if is_en
+                else (
+                    f"Reddetme oranları r1={r1:.3f}, r2={r2:.3f}. "
+                    "Bir partinin 1. departmanı geçip 2. departmanda reddedilme olasılığı nedir?"
+                )
             ),
             "answer": (1 - r1) * r2,
             "tolerance": ANSWER_REL_TOL,
@@ -697,7 +812,7 @@ def question_bank(student_id: str, quiz_session: str) -> list[dict[str, Any]]:
         }
     )
 
-    # Q5 - Seri/paralel devre
+    # Q5 - Series / parallel circuit
     p_a = round(r.uniform(0.85, 0.97), 3)
     p_b = round(r.uniform(0.85, 0.97), 3)
     p_c = round(r.uniform(0.70, 0.90), 3)
@@ -705,11 +820,19 @@ def question_bank(student_id: str, quiz_session: str) -> list[dict[str, Any]]:
     p_system = p_a * p_b * (1 - (1 - p_c) * (1 - p_d))
     questions.append(
         {
-            "title": "Elektrik Devresi",
+            "title": "Electrical Circuit" if is_en else "Elektrik Devresi",
             "text": (
-                f"A ve B seri, C ve D paralel, sonra iki grup tekrar seri. "
-                f"P(A)={p_a:.3f}, P(B)={p_b:.3f}, P(C)={p_c:.3f}, P(D)={p_d:.3f}. "
-                "Tüm sistemin çalışma olasılığı nedir?"
+                (
+                    f"A and B are in series, C and D are in parallel, then both groups are connected in series. "
+                    f"P(A)={p_a:.3f}, P(B)={p_b:.3f}, P(C)={p_c:.3f}, P(D)={p_d:.3f}. "
+                    "What is the operating probability of the whole system?"
+                )
+                if is_en
+                else (
+                    f"A ve B seri, C ve D paralel, sonra iki grup tekrar seri. "
+                    f"P(A)={p_a:.3f}, P(B)={p_b:.3f}, P(C)={p_c:.3f}, P(D)={p_d:.3f}. "
+                    "Tüm sistemin çalışma olasılığı nedir?"
+                )
             ),
             "answer": p_system,
             "tolerance": ANSWER_REL_TOL,
@@ -718,8 +841,6 @@ def question_bank(student_id: str, quiz_session: str) -> list[dict[str, Any]]:
     )
 
     return questions
-
-
 def check_answer(user_value: float, correct_value: float, rel_tol: float) -> bool:
     """% tabanlı toleransli kontrol."""
     return math.isclose(user_value, correct_value, rel_tol=rel_tol, abs_tol=1e-4)
@@ -901,7 +1022,7 @@ def _auto_submit_expired_quiz_from_snapshot(
     quiz_session: str,
     questions: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Süre doldugunda, varsa sakli cevaplari otomatik puanlayip kaydeder."""
+    """Süre doldu?unda, varsa sakli cevaplari otomatik puanlayip kaydeder."""
     session_clean = quiz_session.strip()
     student_id_clean = student_id.strip()
     if not session_clean or not student_id_clean:
@@ -1060,7 +1181,7 @@ def plot_venn(
 
 
 def plot_serum_flow(r1: float, r2: float):
-    """Departman bazli akis gorseli."""
+    """Departman bazli akis g?rseli."""
     fig, ax = _base_figure(6.6, 3.4)
     ax.set_xlim(0, 10)
     ax.set_ylim(0, 5)
@@ -1253,11 +1374,11 @@ def record_result(
 
 
 def evaluate_quiz_availability(control: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
-    """Quizin o an ogrenciye açık olup olmadigini belirler.
+    """Quizin o an öğrenciye açık olup olmadığını belirler.
 
     Dönüş: (phase, message, normalized_control)
-      phase = "quiz"    -> cevap girme süresi (telefona az dokunma)
-      phase = "comment" -> yorum/açıklama süresi (telefona dokunabilir)
+      phase = "quiz"    -> cevap girme süresi
+      phase = "comment" -> yorum/açıklama süresi
       phase = "closed"  -> quiz tamamen kapalı
     """
     normalized = dict(control)
@@ -1266,19 +1387,30 @@ def evaluate_quiz_availability(control: dict[str, Any]) -> tuple[str, str, dict[
     end_at = parse_iso_datetime(str(normalized.get("session_end") or ""))
     comment_end_at = parse_iso_datetime(str(normalized.get("comment_end") or ""))
 
-    # Tüm süreler dolduysa oturumu kapat
     close_at = comment_end_at or end_at
     if normalized.get("is_open") and close_at is not None and now >= close_at:
         normalized["is_open"] = False
         normalized["closed_at"] = _now_iso()
         save_quiz_control(normalized)
-        return "closed", "Quiz sonlandı. Quiz ve yorum süresi doldu. Oturum otomatik kapatıldı.", normalized
+        return (
+            "closed",
+            tr(
+                "Quiz sonlandı. Quiz ve yorum süresi doldu. Oturum otomatik kapatıldı.",
+                "Quiz ended. Quiz and comment periods are over. Session was closed automatically.",
+            ),
+            normalized,
+        )
 
     active_session = str(normalized.get("active_session") or "")
     if not normalized.get("is_open") or not active_session:
         return (
             "closed",
-            f"Quiz şu an kapalı. Baz alınan saat: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now)}",
+            tr(
+                "Quiz şu an kapalı. Baz alınan saat: {time_basis} | Sistem saati: {now}",
+                "Quiz is currently closed. Time basis: {time_basis} | System time: {now}",
+                time_basis=time_basis_for_ui(),
+                now=format_dt_obj_for_ui(now),
+            ),
             normalized,
         )
 
@@ -1286,39 +1418,43 @@ def evaluate_quiz_availability(control: dict[str, Any]) -> tuple[str, str, dict[
     if start_at is not None and now < start_at:
         return (
             "closed",
-            "Quiz henüz başlamadı. "
-            f"Sistem saati: {format_dt_obj_for_ui(now)} | "
-            f"Başlangıç: {format_dt_for_ui(normalized['session_start'])}",
+            tr(
+                "Quiz henüz başlamadı. Sistem saati: {now} | Başlangıç: {start}",
+                "Quiz has not started yet. System time: {now} | Start: {start}",
+                now=format_dt_obj_for_ui(now),
+                start=format_dt_for_ui(normalized["session_start"]),
+            ),
             normalized,
         )
 
-    # Quiz cevap süresi hala devam ediyor mu?
     if end_at is not None and now >= end_at:
-        # Quiz süresi doldu ama yorum süresi var ve devam ediyor
         if comment_end_at is not None and now < comment_end_at:
             remaining = int((comment_end_at - now).total_seconds())
             mins = max(1, math.ceil(remaining / 60))
             return (
                 "comment",
-                f"Quiz sonlandı. Yorum yazma süresi devam ediyor (kalan: ~{mins} dk).",
+                tr(
+                    "Quiz sonlandı. Yorum yazma süresi devam ediyor (kalan: ~{mins} dk).",
+                    "Quiz ended. Comment period is still open (~{mins} min left).",
+                    mins=mins,
+                ),
                 normalized,
             )
-        # comment_end yoksa veya o da dolduysa kapalı (yukaridaki blokta yakalanir ama guvenlik için)
-        return "closed", "Quiz sonlandı. Süre doldu.", normalized
+        return "closed", tr("Quiz sonlandı. Süre doldu.", "Quiz ended. Time is up."), normalized
 
     return "quiz", "", normalized
 
 
 def render_session_report(df: pd.DataFrame, active_session: str):
-    """Oturum bazli ozet metrikler."""
-    st.markdown("### Oturum Bazlı Rapor")
+    """Oturum bazlı özet metrikler."""
+    st.markdown(f"### {tr('Oturum Bazlı Rapor', 'Session Report')}")
     if "quiz_session" not in df.columns:
-        st.info("Rapor için quiz_session kolonu bulunamadı.")
+        st.info(tr("Rapor için quiz_session kolonu bulunamadı.", "quiz_session column was not found for reporting."))
         return
 
     sessions = [s for s in df["quiz_session"].astype(str).str.strip().unique().tolist() if s]
     if not sessions:
-        st.info("Raporlanacak oturum kaydı yok.")
+        st.info(tr("Raporlanacak oturum kaydı yok.", "No session records available for reporting."))
         return
 
     sessions = sorted(sessions, reverse=True)
@@ -1327,7 +1463,7 @@ def render_session_report(df: pd.DataFrame, active_session: str):
         default_idx = sessions.index(active_session)
 
     selected_session = st.selectbox(
-        "Rapor Oturumu",
+        tr("Rapor Oturumu", "Report Session"),
         options=sessions,
         index=default_idx,
         key="report_session_select",
@@ -1335,7 +1471,7 @@ def render_session_report(df: pd.DataFrame, active_session: str):
 
     session_df = df[df["quiz_session"].astype(str).str.strip() == selected_session].copy()
     if session_df.empty:
-        st.info("Seçilen oturumda kayıt yok.")
+        st.info(tr("Seçilen oturumda kayıt yok.", "No records found in the selected session."))
         return
 
     if "student_id" in session_df.columns:
@@ -1349,10 +1485,10 @@ def render_session_report(df: pd.DataFrame, active_session: str):
     min_score = f"{score_series.min():.1f}" if not score_series.empty else "-"
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Katilan", int(participants))
-    m2.metric("Ortalama", avg_score)
-    m3.metric("En Yüksek", max_score)
-    m4.metric("En Düşük", min_score)
+    m1.metric(tr("Katılan", "Participants"), int(participants))
+    m2.metric(tr("Ortalama", "Average"), avg_score)
+    m3.metric(tr("En Yüksek", "Highest"), max_score)
+    m4.metric(tr("En Düşük", "Lowest"), min_score)
 
     visible_cols = ["timestamp", "student_id", "student_name", "teacher_name", "score"]
     existing_cols = [col for col in visible_cols if col in session_df.columns]
@@ -1361,88 +1497,140 @@ def render_session_report(df: pd.DataFrame, active_session: str):
 
 
 def render_qr(url: str) -> None:
-    """Verilen URL için QR gorseli uretip ekrana basar."""
+    """Verilen URL için QR görseli üretip ekrana basar."""
     qr = qrcode.QRCode(border=2, box_size=6)
     qr.add_data(url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    st.image(buf.getvalue(), caption="Öğrenciler bu QR ile quize girer.", width=220)
+    st.image(
+        buf.getvalue(),
+        caption=tr("Öğrenciler bu QR ile quize girer.", "Students enter the quiz via this QR code."),
+        width=220,
+    )
 
 
 def render_student_entry_qr() -> None:
     """Öğrenci erişim linki ve QR bilgisini gösterir."""
     base_url = get_public_base_url()
     if base_url:
-        st.markdown("#### Öğrenci Erişim")
+        st.markdown(f"#### {tr('Öğrenci Erişim', 'Student Access')}")
         st.code(base_url, language="text")
         render_qr(base_url)
     else:
-        st.info("QR için PUBLIC_BASE_URL secret giriniz.")
+        st.info(tr("QR için PUBLIC_BASE_URL secret giriniz.", "Set PUBLIC_BASE_URL in secrets to enable QR."))
 
 
 def teacher_view():
     """Öğretmen paneli."""
-    st.subheader("Öğretmen Modu")
+    st.subheader(tr("Öğretmen Modu", "Teacher Mode"))
 
     if not is_teacher_code_configured():
-        st.error("Secrets/.env ayarı eksik: TEACHER_CODE_HASH tanımlı değil veya geçersiz.")
-        st.code("TEACHER_CODE_HASH=<sha256_hex_değeri>\n# veya\nTEACHER_CODE=<düz-metin-kod>", language="bash")
-        st.caption(
-            "Hash üretmek için: python -c \"import hashlib; print(hashlib.sha256('yeni-kod'.encode()).hexdigest())\""
+        st.error(
+            tr(
+                "Secrets/.env ayarı eksik: TEACHER_CODE_HASH tanımlı değil veya geçersiz.",
+                "Missing secrets/.env config: TEACHER_CODE_HASH is not defined or invalid.",
+            )
         )
-        st.caption("Streamlit Cloud'da bu değeri App Settings -> Secrets bölümüne eklemelisiniz.")
+        st.code(
+            tr(
+                "TEACHER_CODE_HASH=<sha256_hex_değeri>\n# veya\nTEACHER_CODE=<düz-metin-kod>",
+                "TEACHER_CODE_HASH=<sha256_hex_value>\n# or\nTEACHER_CODE=<plain-text-code>",
+            ),
+            language="bash",
+        )
+        st.caption(
+            tr(
+                "Hash üretmek için: python -c \"import hashlib; print(hashlib.sha256('yeni-kod'.encode()).hexdigest())\"",
+                "Generate hash with: python -c \"import hashlib; print(hashlib.sha256('new-code'.encode()).hexdigest())\"",
+            )
+        )
+        st.caption(
+            tr(
+                "Streamlit Cloud'da bu değeri App Settings -> Secrets bölümüne eklemelisiniz.",
+                "On Streamlit Cloud, add this value under App Settings -> Secrets.",
+            )
+        )
         return
 
+    select_placeholder = tr("Seçiniz...", "Select...")
     selected_teacher = st.selectbox(
-        "Öğretmen Seçimi",
-        options=["Seçiniz..."] + TEACHER_OPTIONS,
+        tr("Öğretmen Seçimi", "Teacher Selection"),
+        options=[select_placeholder] + TEACHER_OPTIONS,
         key="teacher_login_select",
     )
-    code = st.text_input("Öğretmen kodu", type="password", key="teacher_code_input")
-    if selected_teacher == "Seçiniz..." or not code.strip():
-        st.info("Öğretmeninizi seçip kodu girdiğinizde sadece kendi öğrencilerinizi görürsünüz.")
+    code = st.text_input(tr("Öğretmen kodu", "Teacher code"), type="password", key="teacher_code_input")
+    if selected_teacher == select_placeholder or not code.strip():
+        st.info(
+            tr(
+                "Öğretmeninizi seçip kodu girdiğinizde sadece kendi öğrencilerinizi görürsünüz.",
+                "After selecting your name and entering the code, you will only see your own students.",
+            )
+        )
         return
     if not verify_teacher_code(code):
-        st.error("Öğretmen kodu hatalı.")
+        st.error(tr("Öğretmen kodu hatalı.", "Invalid teacher code."))
         return
 
-    st.caption(f"Giriş yapan Öğretmen: {selected_teacher}")
+    st.caption(tr("Giriş yapan Öğretmen: {teacher}", "Logged-in Teacher: {teacher}", teacher=selected_teacher))
     if "teacher_clear_message" in st.session_state:
         st.success(st.session_state.pop("teacher_clear_message"))
 
-    with st.expander("Veri Temizleme", expanded=False):
-        st.warning("Bu işlem seçili öğretmene ait tüm Öğrenci kayıtlarını kalıcı olarak siler.")
+    with st.expander(tr("Veri Temizleme", "Data Cleanup"), expanded=False):
+        st.warning(
+            tr(
+                "Bu işlem seçili öğretmene ait tüm öğrenci kayıtlarını kalıcı olarak siler.",
+                "This operation permanently deletes all student records of the selected teacher.",
+            )
+        )
         confirm_clear = st.checkbox(
-            "Seçili öğretmene ait tüm kayıtları silmek istiyorum.",
+            tr(
+                "Seçili öğretmene ait tüm kayıtları silmek istiyorum.",
+                "I want to delete all records of the selected teacher.",
+            ),
             key="confirm_teacher_data_clear",
         )
         if st.button(
-            "Seçili Ogretmenin Verilerini Temizle",
+            tr("Seçili Öğretmenin Verilerini Temizle", "Clear Selected Teacher Data"),
             use_container_width=True,
             key="clear_teacher_data_btn",
         ):
             if not confirm_clear:
-                st.error("Lütfen önce onay kutusunu işaretleyin.")
+                st.error(tr("Lütfen önce onay kutusunu işaretleyin.", "Please check the confirmation box first."))
             else:
                 removed = clear_results_for_teacher(selected_teacher)
                 st.session_state["teacher_clear_message"] = (
-                    f"{selected_teacher} için {removed} kayıt silindi."
+                    tr(
+                        "{teacher} için {removed} kayıt silindi.",
+                        "Deleted {removed} records for {teacher}.",
+                        teacher=selected_teacher,
+                        removed=removed,
+                    )
                     if removed > 0
-                    else f"{selected_teacher} için silinecek kayıt bulunamadı."
+                    else tr(
+                        "{teacher} için silinecek kayıt bulunamadı.",
+                        "No records found to delete for {teacher}.",
+                        teacher=selected_teacher,
+                    )
                 )
                 rerun_app()
 
     control = auto_close_quiz_if_expired(load_quiz_control())
     now = now_in_app_timezone()
 
-    st.markdown("### Quiz Yönetimi")
-    st.caption(f"Baz alınan saat dilimi: {time_basis_for_ui()}")
-    st.caption(f"Sunucu sistem saati: {format_dt_obj_for_ui(now)}")
+    st.markdown(f"### {tr('Quiz Yönetimi', 'Quiz Management')}")
+    st.caption(tr("Baz alınan saat dilimi: {tz}", "Time basis: {tz}", tz=time_basis_for_ui()))
+    st.caption(tr("Sunucu sistem saati: {now}", "Server system time: {now}", now=format_dt_obj_for_ui(now)))
     if control["is_open"] and control["active_session"]:
-        st.success(f"Durum: AÇIK | Oturum: {control['active_session']}")
-        st.caption(f"Başlangıç: {format_dt_for_ui(control['session_start'])}")
+        st.success(
+            tr(
+                "Durum: AÇIK | Oturum: {session}",
+                "Status: OPEN | Session: {session}",
+                session=control["active_session"],
+            )
+        )
+        st.caption(tr("Başlangıç: {start}", "Start: {start}", start=format_dt_for_ui(control["session_start"])))
         duration_minutes = int(control.get("quiz_duration_minutes", 0) or 0)
         if duration_minutes <= 0:
             start_at_for_duration = parse_iso_datetime(control["session_start"])
@@ -1453,65 +1641,95 @@ def teacher_view():
                     int(round((end_at_for_duration - start_at_for_duration).total_seconds() / 60)),
                 )
         if duration_minutes > 0:
-            st.caption(f"Quiz süresi: {duration_minutes} dakika")
-        tab_rule_state = "Açık" if bool(control.get("tab_violation_enabled", True)) else "Kapalı"
-        st.caption(f"Sekme değişikliği cezası: {tab_rule_state}")
+            st.caption(
+                tr(
+                    "Quiz süresi: {minutes} dakika",
+                    "Quiz duration: {minutes} minutes",
+                    minutes=duration_minutes,
+                )
+            )
+        tab_rule_state = tr("Açık", "Enabled") if bool(control.get("tab_violation_enabled", True)) else tr("Kapalı", "Disabled")
+        st.caption(
+            tr(
+                "Sekme değişikliği cezası: {state}",
+                "Tab-switch penalty: {state}",
+                state=tab_rule_state,
+            )
+        )
         if control["opened_at"]:
-            st.caption(f"Açılış zamanı: {format_dt_for_ui(control['opened_at'])}")
+            st.caption(tr("Açılış zamanı: {opened}", "Opened at: {opened}", opened=format_dt_for_ui(control["opened_at"])))
 
         start_at = parse_iso_datetime(control["session_start"])
         end_at = parse_iso_datetime(control["session_end"])
         comment_end_at = parse_iso_datetime(str(control.get("comment_end") or ""))
         if start_at is not None and now < start_at:
-            st.info("Oturum planlandı ancak henüz başlamadı.")
+            st.info(tr("Oturum planlandı ancak henüz başlamadı.", "Session is scheduled but has not started yet."))
         elif end_at is not None and now < end_at:
             remaining_seconds = int((end_at - now).total_seconds())
             remaining_minutes = max(1, math.ceil(remaining_seconds / 60))
-            st.info(f"Quiz cevap süresi kalan: ~{remaining_minutes} dakika")
+            st.info(
+                tr(
+                    "Quiz cevap süresi kalan: ~{minutes} dakika",
+                    "Quiz answer time left: ~{minutes} minutes",
+                    minutes=remaining_minutes,
+                )
+            )
         elif end_at is not None and now >= end_at and comment_end_at is not None and now < comment_end_at:
             remaining_seconds = int((comment_end_at - now).total_seconds())
             remaining_minutes = max(1, math.ceil(remaining_seconds / 60))
-            st.info(f"Yorum yazma süresi kalan: ~{remaining_minutes} dakika")
+            st.info(
+                tr(
+                    "Yorum yazma süresi kalan: ~{minutes} dakika",
+                    "Comment-writing time left: ~{minutes} minutes",
+                    minutes=remaining_minutes,
+                )
+            )
 
         st.metric(
-            "Bu oturumda teslim",
+            tr("Bu oturumda teslim", "Submissions in this session"),
             submission_count_for_session(control["active_session"], selected_teacher),
         )
         render_student_entry_qr()
-        if st.button("Quizi Kapat", use_container_width=True, key="close_quiz_btn"):
+        if st.button(tr("Quizi Kapat", "Close Quiz"), use_container_width=True, key="close_quiz_btn"):
             control["is_open"] = False
             control["closed_at"] = _now_iso()
             save_quiz_control(control)
             rerun_app()
     else:
-        st.warning("Durum: KAPALI")
+        st.warning(tr("Durum: KAPALI", "Status: CLOSED"))
         if control["closed_at"]:
-            st.caption(f"Son kapanış zamanı: {format_dt_for_ui(control['closed_at'])}")
+            st.caption(tr("Son kapanış zamanı: {closed}", "Last closed at: {closed}", closed=format_dt_for_ui(control["closed_at"])))
 
         default_start = now.replace(second=0, microsecond=0)
         default_duration_minutes = 30
         default_start_time = default_start.time().replace(tzinfo=None)
-        with st.expander("Yeni Oturum Zaman Penceresi", expanded=True):
-            start_date = st.date_input("Başlangıç tarihi", value=default_start.date(), key="session_start_date")
+        with st.expander(tr("Yeni Oturum Zaman Penceresi", "New Session Time Window"), expanded=True):
+            start_date = st.date_input(tr("Başlangıç tarihi", "Start date"), value=default_start.date(), key="session_start_date")
             start_time = st.time_input(
-                "Başlangıç saati",
+                tr("Başlangıç saati", "Start time"),
                 value=default_start_time,
                 key="session_start_time",
                 step=timedelta(minutes=1),
             )
             selected_duration = st.selectbox(
-                "Sunum/Quiz süresi (dk)",
+                tr("Sunum/Quiz süresi (dk)", "Lecture/Quiz duration (min)"),
                 options=QUIZ_DURATION_OPTIONS,
                 index=QUIZ_DURATION_OPTIONS.index(default_duration_minutes),
                 key="quiz_duration_select",
             )
             tab_violation_enabled = st.toggle(
-                "Sekme/uygulama değişikliği tespiti aktif (ihlalde quiz sonlansın)",
+                tr(
+                    "Sekme/uygulama değişikliği tespiti aktif (ihlalde quiz sonlansın)",
+                    "Enable tab/app switch monitoring (auto-end on violation)",
+                ),
                 value=False,
                 key="tab_violation_toggle",
             )
             comment_minutes = st.number_input(
-                "Yorum süresi (dk) — Quiz bittikten sonra açıklama yazma için ek süre",
+                tr(
+                    "Yorum süresi (dk) - Quiz bittikten sonra açıklama yazma için ek süre",
+                    "Comment duration (min) - extra time after quiz for explanations",
+                ),
                 min_value=0,
                 max_value=60,
                 value=5,
@@ -1523,15 +1741,27 @@ def teacher_view():
         start_at = datetime.combine(start_date, start_time).replace(tzinfo=tz)
         end_at = start_at + timedelta(minutes=int(selected_duration))
         comment_end_at = end_at + timedelta(minutes=comment_minutes) if comment_minutes > 0 else None
-        st.caption(f"Seçilen başlangıç: {format_dt_obj_for_ui(start_at)}")
-        st.caption(f"Seçilen sunum/quiz süresi: {selected_duration} dakika")
+        st.caption(tr("Seçilen başlangıç: {value}", "Selected start: {value}", value=format_dt_obj_for_ui(start_at)))
         st.caption(
-            "Sekme değişikliği cezası: "
-            + ("Açık (ihlalde quiz sonlanır)" if tab_violation_enabled else "Kapalı")
+            tr(
+                "Seçilen sunum/quiz süresi: {duration} dakika",
+                "Selected lecture/quiz duration: {duration} minutes",
+                duration=selected_duration,
+            )
+        )
+        st.caption(
+            tr("Sekme değişikliği cezası: ", "Tab-switch penalty: ")
+            + (
+                tr("Açık (ihlalde quiz sonlanır)", "Enabled (quiz ends on violation)")
+                if tab_violation_enabled
+                else tr("Kapalı", "Disabled")
+            )
         )
         if comment_end_at:
-            st.caption(f"Seçilen yorum bitiş: {format_dt_obj_for_ui(comment_end_at)}")
-        if st.button("Quizi Aç (Yeni Oturum)", type="primary", use_container_width=True, key="open_quiz_btn"):
+            st.caption(
+                tr("Seçilen yorum bitiş: {value}", "Selected comment end: {value}", value=format_dt_obj_for_ui(comment_end_at))
+            )
+        if st.button(tr("Quizi Aç (Yeni Oturum)", "Open Quiz (New Session)"), type="primary", use_container_width=True, key="open_quiz_btn"):
             save_quiz_control(
                 {
                     "is_open": True,
@@ -1549,7 +1779,7 @@ def teacher_view():
 
     df_all = load_results_df()
     if df_all.empty:
-        st.warning("Henüz kayıt yok.")
+        st.warning(tr("Henüz kayıt yok.", "No records yet."))
         return
 
     if "student_name" not in df_all.columns:
@@ -1562,7 +1792,10 @@ def teacher_view():
     df_teacher = df_all[df_all["teacher_name"].astype(str).str.strip() == selected_teacher].copy()
     render_session_report(df_teacher, str(control.get("active_session") or ""))
 
-    query = st.text_input("Kendi öğrencilerinizde ara (numara, isim veya oturum)", key="teacher_search")
+    query = st.text_input(
+        tr("Kendi öğrencilerinizde ara (numara, isim veya oturum)", "Search your students (number, name, or session)"),
+        key="teacher_search",
+    )
     filtered = df_teacher
     if query:
         query_str = query.strip()
@@ -1573,12 +1806,10 @@ def teacher_view():
         filtered = filtered[mask]
 
     if filtered.empty:
-        st.info("Eşleşen kayıt bulunamadı.")
+        st.info(tr("Eşleşen kayıt bulunamadı.", "No matching records found."))
         return
 
     st.dataframe(filtered.sort_values("timestamp", ascending=False), width="stretch")
-
-
 def _generate_bg_svg(rng: OcrShieldRng, width: int = 600, height: int = 200) -> str:
     """K8: Arka plan SVG gurultusu.
 
@@ -1661,16 +1892,22 @@ def _generate_bg_svg(rng: OcrShieldRng, width: int = 600, height: int = 200) -> 
     return f"url('data:image/svg+xml;base64,{b64}')"
 
 
-def render_question_card(title: str, body: str, index: int):
+def render_question_card(
+    title: str,
+    body: str,
+    index: int,
+    language: str = DEFAULT_UI_LANGUAGE,
+):
     body = (
         body.replace("âˆ©", "∩")
         .replace("Ã¢Ë†Â©", "∩")
         .replace("P(U@D)", "P(U∩D)")
         .replace("P(Y@F)", "P(Y∩F)")
     )
+    question_prefix = "Question" if normalize_ui_language(language) == "en" else "Soru"
     rng = _get_ocr_rng()
     if rng is not None:
-        rendered_title = _ocr_shield_full(f"Soru {index}: {title}", rng)
+        rendered_title = _ocr_shield_full(f"{question_prefix} {index}: {title}", rng)
         rendered_body = _ocr_shield_full(body, rng)
         bg_svg = _generate_bg_svg(rng)
         card_style = (
@@ -1678,7 +1915,7 @@ def render_question_card(title: str, body: str, index: int):
             f"background-size:cover;background-repeat:no-repeat;"
         )
     else:
-        rendered_title = f"Soru {index}: {html.escape(title)}"
+        rendered_title = f"{question_prefix} {index}: {html.escape(title)}"
         rendered_body = html.escape(body)
         card_style = ""
 
@@ -1697,7 +1934,7 @@ def inject_styles():
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2family=Space+Grotesk:wght@400;600;700&display=swap');
         :root {
             --bg-main: #0b132b;
             --bg-soft: #1c2541;
@@ -1867,9 +2104,9 @@ def _update_explanations(student_id: str, quiz_session: str, explanations: dict[
     df.to_csv(RESULTS_PATH, index=False, encoding="utf-8")
 
 
-# ══════════════════════════════════════════════════════════════════
+# Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 # SEKME / UYGULAMA DEGİSİKLİGİ TESPİT SİSTEMİ
-# ══════════════════════════════════════════════════════════════════
+# Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
 def _check_tab_violation(
     student_id: str,
@@ -1898,82 +2135,144 @@ def _record_tab_violation(
     teacher_name: str,
     quiz_session: str,
     questions: list[dict[str, Any]],
+    language: str = DEFAULT_UI_LANGUAGE,
 ) -> None:
     """Sekme değişikliği ihlalini 0 puanla CSV'ye kaydeder."""
+    is_en = normalize_ui_language(language) == "en"
+    explanation_text = (
+        "[VIOLATION] Screen/tab switch detected - quiz was auto-terminated."
+        if is_en
+        else "[IHLAL] Ekran/sekme değişikliği - quiz otomatik sonlandırıldı."
+    )
     scored: list[dict[str, Any]] = []
     for q in questions:
-        scored.append({
-            "given": 0.0,
-            "correct": q["answer"],
-            "is_correct": False,
-            "explanation": "[IHLAL] Ekran/sekme değişikliği - quiz otomatik sonlandırıldı.",
-        })
+        scored.append(
+            {
+                "given": 0.0,
+                "correct": q["answer"],
+                "is_correct": False,
+                "explanation": explanation_text,
+            }
+        )
     record_result(student_id, student_name, teacher_name, quiz_session, 0, scored)
     _clear_quiz_answer_snapshot(f"{quiz_session.strip()}:{student_id.strip()}")
 
 
-def _render_violation_block() -> None:
-    """Ihlal durumunda ogrenciye gosterilen uyarı blogu."""
+def _render_violation_block(language: str = DEFAULT_UI_LANGUAGE) -> None:
+    """İhlal durumunda öğrenciye gösterilen uyarı bloğu."""
+    is_en = normalize_ui_language(language) == "en"
+    title = "Quiz Terminated" if is_en else "Quiziniz Sonlandırıldı"
+    line1 = (
+        "A switch to another app or browser tab was detected during the quiz."
+        if is_en
+        else "Quiz sırasında başka bir uygulamaya veya sekmeye geçtiğiniz tespit edildi."
+    )
+    line2 = (
+        "To preserve exam integrity, your quiz was recorded as <strong>0 points</strong>."
+        if is_en
+        else "Kopya ihtimaline karşı quiziniz <strong>0 puan</strong> olarak kaydedilmiştir."
+    )
+    line3 = (
+        "This event has been reported to your instructor."
+        if is_en
+        else "Bu durum öğretmeninize bildirilmiştir."
+    )
     st.markdown(
-        """
+        f"""
         <div class="tab-violation-banner">
-            <h2>&#9888; Quiziniz Sonlandırıldı</h2>
+            <h2>&#9888; {title}</h2>
             <p>
-                Quiz sırasında başka bir uygulamaya veya sekmeye geçtiğiniz tespit edildi.<br>
-                Kopya ihtimaline karşı quiziniz <strong>0 puan</strong> olarak kaydedilmiştir.<br>
-                Bu durum öğretmeninize bildirilmistir.
+                {line1}<br>
+                {line2}<br>
+                {line3}
             </p>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.error(
-        "Quiz kurallarina göre ekran/sekme degisikligi yapmaniz durumunda "
-        "quiziniz otomatik olarak sonlandırılır ve 0 puan kaydedilir."
+        (
+            "Per quiz rules, switching screens/tabs automatically ends the quiz and records 0 points."
+            if is_en
+            else "Quiz kurallarına göre ekran/sekme değişikliği yapmanız durumunda quiziniz otomatik olarak sonlandırılır ve 0 puan kaydedilir."
+        )
     )
 
 
 def main():
-    st.set_page_config(page_title="Kişiye Özel Olasılık Quizi", page_icon="Q", layout="wide")
+    st.set_page_config(page_title="Personalized Probability Quiz", page_icon="Q", layout="wide")
     inject_styles()
 
-    st.title("Kişiye Özel 5 Soruluk Olasılık Quizi")
-    st.caption("Sayılar Öğrenci numarasına göre değişir. Her oturumda her Öğrenci tek kez teslim yapabilir.")
-
     with st.sidebar:
-        st.header("Kontrol Paneli")
-        st.markdown("- Tolerans: +/- %5 (göreli)\n- Her soru 20 puan\n- Sorular öğrenciye özeldir")
+        selected_language = render_language_selector()
+        st.header(tr("Kontrol Paneli", "Control Panel"))
+        st.markdown(
+            tr(
+                "- Tolerans: +/- %5 (göreli)\n- Her soru 20 puan\n- Sorular öğrenciye özeldir",
+                "- Tolerance: +/- 5% (relative)\n- Each question is 20 points\n- Questions are personalized by student",
+            )
+        )
         teacher_view()
+
+    st.title(tr("Kişiye Özel 5 Soruluk Olasılık Quizi", "Personalized 5-Question Probability Quiz"))
+    st.caption(
+        tr(
+            "Sayılar öğrenci numarasına göre değişir. Her oturumda her öğrenci tek kez teslim yapabilir.",
+            "Numbers are generated from the student ID. Each student can submit only once per session.",
+        )
+    )
 
     quiz_phase, quiz_message, quiz_control = evaluate_quiz_availability(load_quiz_control())
     active_session = str(quiz_control.get("active_session") or "")
 
-    # Faz bilgisi
     if quiz_phase == "quiz":
         st.info(
-            f"Aktif quiz oturumu: {active_session} | "
-            f"Başlangıç: {format_dt_for_ui(quiz_control['session_start'])} | "
-            f"Quiz bitiş: {format_dt_for_ui(quiz_control['session_end'])}"
+            tr(
+                "Aktif quiz oturumu: {session} | Başlangıç: {start} | Quiz bitiş: {end}",
+                "Active quiz session: {session} | Start: {start} | Quiz end: {end}",
+                session=active_session,
+                start=format_dt_for_ui(quiz_control["session_start"]),
+                end=format_dt_for_ui(quiz_control["session_end"]),
+            )
         )
         now = now_in_app_timezone()
         end_at = parse_iso_datetime(quiz_control["session_end"])
         if end_at is not None and now < end_at:
             remaining = max(1, math.ceil((end_at - now).total_seconds() / 60))
-            st.caption(f"Cevap süresi kalan: ~{remaining} dk | "
-                       f"Saat dilimi: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now)}")
+            st.caption(
+                tr(
+                    "Cevap süresi kalan: ~{remaining} dk | Saat dilimi: {tz} | Sistem saati: {now}",
+                    "Answer time left: ~{remaining} min | Time basis: {tz} | System time: {now}",
+                    remaining=remaining,
+                    tz=time_basis_for_ui(),
+                    now=format_dt_obj_for_ui(now),
+                )
+            )
     elif quiz_phase == "comment":
         st.warning(quiz_message)
     else:
         st.warning(quiz_message)
 
-    st.caption(f"Baz alınan saat dilimi: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now_in_app_timezone())}")
+    st.caption(
+        tr(
+            "Baz alınan saat dilimi: {tz} | Sistem saati: {now}",
+            "Time basis: {tz} | System time: {now}",
+            tz=time_basis_for_ui(),
+            now=format_dt_obj_for_ui(now_in_app_timezone()),
+        )
+    )
 
-    student_name = st.text_input("Ad Soyad")
-    student_id = st.text_input("Öğrenci Numarası (9 rakam)", max_chars=9, placeholder="210205901")
-    with st.expander("Öğretmen Bilgisi (Aç/Kapat)", expanded=False):
+    student_name = st.text_input(tr("Ad Soyad", "Full Name"))
+    student_id = st.text_input(
+        tr("Öğrenci Numarası (9 rakam)", "Student ID (9 digits)"),
+        max_chars=9,
+        placeholder="210205901",
+    )
+    teacher_placeholder = tr("Seçiniz...", "Select...")
+    with st.expander(tr("Öğretmen Bilgisi (Aç/Kapat)", "Teacher Info (Expand/Collapse)"), expanded=False):
         teacher_name = st.selectbox(
-            "Öğretmeninizi seçiniz",
-            options=["Seçiniz..."] + TEACHER_OPTIONS,
+            tr("Öğretmeninizi seçiniz", "Select your teacher"),
+            options=[teacher_placeholder] + TEACHER_OPTIONS,
             key="teacher_name_select",
         )
 
@@ -1981,24 +2280,23 @@ def main():
     student_id_clean = student_id.strip()
     teacher_name_clean = teacher_name.strip()
 
-    # Öğrenci numarası validasyonu
     if student_id_clean:
         if not student_id_clean.isdigit():
-            st.error("Öğrenci numarası sadece rakamlardan oluşmalıdır.")
+            st.error(tr("Öğrenci numarası sadece rakamlardan oluşmalıdır.", "Student ID must contain only digits."))
             st.stop()
         if len(student_id_clean) != 9:
-            st.error("Öğrenci numarası tam olarak 9 rakam olmalıdır.")
+            st.error(tr("Öğrenci numarası tam olarak 9 rakam olmalıdır.", "Student ID must be exactly 9 digits."))
             st.stop()
         inject_student_id_overlay(student_id_clean)
 
     if not student_name_clean or not student_id_clean:
-        st.info("Lütfen ad soyad ve Öğrenci numarası giriniz.")
+        st.info(tr("Lütfen ad soyad ve öğrenci numarası giriniz.", "Please enter full name and student ID."))
         st.stop()
-    if teacher_name == "Seçiniz...":
-        st.info("Lütfen öğretmeninizi seçiniz.")
+    if teacher_name == teacher_placeholder:
+        st.info(tr("Lütfen öğretmeninizi seçiniz.", "Please select your teacher."))
         st.stop()
 
-    questions = question_bank(student_id_clean, active_session)
+    questions = question_bank(student_id_clean, active_session, language=selected_language)
 
     if quiz_phase == "closed":
         existing_submission = get_existing_submission(student_id_clean, active_session)
@@ -2014,22 +2312,35 @@ def main():
             quiz_auto_submitted = existing_submission is not None
 
         if quiz_auto_submitted:
-            st.success("Quiz süresi bittiği için son kaydedilen cevaplarınız otomatik gönderildi.")
+            st.success(
+                tr(
+                    "Quiz süresi bittiği için son kaydedilen cevaplarınız otomatik gönderildi.",
+                    "Quiz time ended, so your latest saved answers were auto-submitted.",
+                )
+            )
 
         comments_auto_submitted = _auto_submit_expired_comments_from_draft(student_id_clean, active_session)
         existing_submission = existing_submission or get_existing_submission(student_id_clean, active_session)
         comment_end_at = parse_iso_datetime(str(quiz_control.get("comment_end") or ""))
         comment_period_ended = comment_end_at is not None and now_in_app_timezone() >= comment_end_at
         if (comments_auto_submitted or comment_period_ended) and existing_submission is not None:
-            st.success("Yorum süresi doldu. Yorumlarınız gönderilmiştir.")
+            st.success(
+                tr(
+                    "Yorum süresi doldu. Yorumlarınız gönderilmiştir.",
+                    "Comment period ended. Your comments have been submitted.",
+                )
+            )
 
         if existing_submission is not None and pd.notna(existing_submission.get("score")):
-            st.info(f"Kayıtlı puanınız: {int(float(existing_submission['score']))}/100")
+            st.info(
+                tr(
+                    "Kayıtlı puanınız: {score}/100",
+                    "Recorded score: {score}/100",
+                    score=int(float(existing_submission["score"])),
+                )
+            )
         st.stop()
 
-    # ================================================================
-    # FAZ 1: QUIZ — sadece sayısal cevap, telefona minimum dokunma
-    # ================================================================
     if quiz_phase == "quiz":
         tab_violation_enabled = bool(quiz_control.get("tab_violation_enabled", True))
         violation_scope = f"{active_session}:{student_id_clean}"
@@ -2039,7 +2350,6 @@ def main():
 
         quiz_end_at = parse_iso_datetime(str(quiz_control.get("session_end") or ""))
 
-        # --- Sekme/uygulama degisikligi + sure sonu tetigi ---
         tab_violated = _check_tab_violation(
             student_id_clean,
             active_session,
@@ -2047,13 +2357,11 @@ def main():
             monitor_enabled=tab_violation_enabled,
         )
         if tab_violation_enabled and tab_violated:
-            # Session state'e kaydet (kalici)
             st.session_state["_tab_violation"] = True
         elif not tab_violation_enabled:
             st.session_state["_tab_violation"] = False
 
         if st.session_state.get("_tab_violation"):
-            # Ihlal varsa: once kayıt kontrol et, kayıt yoksa 0 puan yaz
             existing_submission = get_existing_submission(student_id_clean, active_session)
             if existing_submission is None:
                 _record_tab_violation(
@@ -2062,29 +2370,43 @@ def main():
                     teacher_name_clean,
                     active_session,
                     questions,
+                    language=selected_language,
                 )
-            _render_violation_block()
+            _render_violation_block(language=selected_language)
             st.stop()
 
         existing_submission = get_existing_submission(student_id_clean, active_session)
         if existing_submission is not None:
             _clear_quiz_answer_snapshot(f"{active_session}:{student_id_clean}")
-            st.error("Bu oturumda daha önce teslim yaptınız. Quiz süresi bittiğinde yorumlarınızı yazabilirsiniz.")
+            st.error(
+                tr(
+                    "Bu oturumda daha önce teslim yaptınız. Quiz süresi bittiğinde yorumlarınızı yazabilirsiniz.",
+                    "You already submitted in this session. You can write comments after quiz time ends.",
+                )
+            )
             if pd.notna(existing_submission.get("score")):
-                st.info(f"Kayıtlı puanınız: {int(float(existing_submission['score']))}/100")
+                st.info(
+                    tr(
+                        "Kayıtlı puanınız: {score}/100",
+                        "Recorded score: {score}/100",
+                        score=int(float(existing_submission["score"])),
+                    )
+                )
             st.stop()
 
         if tab_violation_enabled:
             st.markdown(
-                "> **Quiz Aşaması:** Sadece sayısal cevapları giriniz. "
-                "Quiz süresi bittikten sonra açıklama/yorum yazmak için ek süre verilecektir.\n\n"
-                "> &#9888; **Uyarı:** Quiz sırasında başka bir uygulamaya veya sekmeye geçerseniz "
-                "quiziniz **otomatik olarak sonlandırılır** ve **0 puan** kaydedilir."
+                tr(
+                    "> **Quiz Aşaması:** Sadece sayısal cevapları giriniz. Quiz süresi bittikten sonra açıklama/yorum yazmak için ek süre verilecektir.\n\n> &#9888; **Uyarı:** Quiz sırasında başka bir uygulamaya veya sekmeye geçerseniz quiziniz **otomatik olarak sonlandırılır** ve **0 puan** kaydedilir.",
+                    "> **Quiz Phase:** Enter numeric answers only. After the quiz ends, you will get extra time for explanations/comments.\n\n> &#9888; **Warning:** If you switch to another app/tab during the quiz, your quiz will be **auto-terminated** and recorded as **0 points**.",
+                )
             )
         else:
             st.markdown(
-                "> **Quiz Aşaması:** Sadece sayısal cevapları giriniz. "
-                "Quiz süresi bittikten sonra açıklama/yorum yazmak için ek süre verilecektir."
+                tr(
+                    "> **Quiz Aşaması:** Sadece sayısal cevapları giriniz. Quiz süresi bittikten sonra açıklama/yorum yazmak için ek süre verilecektir.",
+                    "> **Quiz Phase:** Enter numeric answers only. After the quiz ends, you will get extra time for explanations/comments.",
+                )
             )
 
         saved_answers = _read_quiz_answer_snapshot(violation_scope, len(questions))
@@ -2092,12 +2414,12 @@ def main():
         cols = st.columns(2, gap="large")
         for idx, q in enumerate(questions, start=1):
             with cols[(idx - 1) % 2]:
-                render_question_card(q["title"], q["text"], idx)
+                render_question_card(q["title"], q["text"], idx, language=selected_language)
                 default_value = 0.0
                 if saved_answers is not None and idx - 1 < len(saved_answers):
                     default_value = _sanitize_answer_value(saved_answers[idx - 1])
                 user_value = st.number_input(
-                    "Cevabın (0-1 arasi)",
+                    tr("Cevabın (0-1 arası)", "Your answer (0-1)"),
                     key=f"ans_{active_session}_{student_id_clean}_{idx}",
                     min_value=0.0,
                     max_value=1.0,
@@ -2125,29 +2447,34 @@ def main():
             student_name_clean,
             teacher_name_clean,
         )
-        st.caption("Cevaplarınız otomatik olarak kaydediliyor.")
+        st.caption(tr("Cevaplarınız otomatik olarak kaydediliyor.", "Your answers are saved automatically."))
 
         confirm_submit = st.checkbox(
-            "Cevaplarımı göndermek istediğime eminim. (Gönderdikten sonra değiştiremezsiniz.)",
+            tr(
+                "Cevaplarımı göndermek istediğime eminim. (Gönderdikten sonra değiştiremezsiniz.)",
+                "I confirm that I want to submit my answers. (You cannot change them after submission.)",
+            ),
             key=f"confirm_submit_checkbox_{active_session}_{student_id_clean}",
         )
-        if st.button("Cevapları Gönder ve Puanla", type="primary", disabled=not confirm_submit):
+        if st.button(tr("Cevapları Gönder ve Puanla", "Submit Answers and Score"), type="primary", disabled=not confirm_submit):
             if get_existing_submission(student_id_clean, active_session) is not None:
-                st.error("Bu oturum için kaydınız zaten alınmış.")
+                st.error(tr("Bu oturum için kaydınız zaten alınmış.", "Your submission for this session is already recorded."))
                 st.stop()
 
             score, scored = _score_quiz_answers(questions, [ans["given"] for ans in answers])
 
-            st.success(f"Toplam puan: {score}/100")
-            st.info("Sonucunuz kaydedildi. Quiz süresi bittikten sonra açıklama/yorum yazabileceksiniz.")
+            st.success(tr("Toplam puan: {score}/100", "Total score: {score}/100", score=score))
+            st.info(
+                tr(
+                    "Sonucunuz kaydedildi. Quiz süresi bittikten sonra açıklama/yorum yazabileceksiniz.",
+                    "Your result has been saved. You can write explanations/comments after quiz time ends.",
+                )
+            )
 
             record_result(student_id_clean, student_name_clean, teacher_name_clean, active_session, score, scored)
             _clear_quiz_answer_snapshot(f"{active_session}:{student_id_clean}")
             st.balloons()
 
-    # ================================================================
-    # FAZ 2: YORUM — cevaplar kilitli, açıklama kutulari açık
-    # ================================================================
     elif quiz_phase == "comment":
         comment_end_at = parse_iso_datetime(str(quiz_control.get("comment_end") or ""))
         if comment_end_at is not None:
@@ -2168,54 +2495,78 @@ def main():
                 questions,
             )
             if existing_submission is None:
-                st.error("Quiz sürecinde cevap göndermediniz. Yorum aşamasında yeni cevap kabul edilmez.")
+                st.error(
+                    tr(
+                        "Quiz sürecinde cevap göndermediniz. Yorum aşamasında yeni cevap kabul edilmez.",
+                        "You did not submit answers during the quiz. New answers are not accepted in comment phase.",
+                    )
+                )
                 st.stop()
-            st.success("Quiz süresi dolduğu için mevcut cevaplarınız otomatik gönderildi ve puanlandı.")
+            st.success(
+                tr(
+                    "Quiz süresi dolduğu için mevcut cevaplarınız otomatik gönderildi ve puanlandı.",
+                    "Quiz time ended, so your current answers were auto-submitted and scored.",
+                )
+            )
 
         comment_scope = f"{active_session}:{student_id_clean}"
         draft_explanations = _read_comment_draft(comment_scope) or {}
 
         if pd.notna(existing_submission.get("score")):
-            st.info(f"Kayıtlı puanınız: {int(float(existing_submission['score']))}/100")
+            st.info(
+                tr(
+                    "Kayıtlı puanınız: {score}/100",
+                    "Recorded score: {score}/100",
+                    score=int(float(existing_submission["score"])),
+                )
+            )
 
         st.markdown(
-            "> **Yorum Aşaması:** Quiz süresi doldu. Cevapların kilitlenmiştir. "
-            "Aşağıda her soru için Çözüm açıklamanızı yazabilirsiniz."
+            tr(
+                "> **Yorum Aşaması:** Quiz süresi doldu. Cevaplarınız kilitlenmiştir. Aşağıda her soru için çözüm açıklamanızı yazabilirsiniz.",
+                "> **Comment Phase:** Quiz time is over. Your answers are locked. You can write your solution explanations below.",
+            )
         )
 
         explanations: dict[int, str] = {}
         cols = st.columns(2, gap="large")
         for idx, q in enumerate(questions, start=1):
             with cols[(idx - 1) % 2]:
-                render_question_card(q["title"], q["text"], idx)
+                render_question_card(q["title"], q["text"], idx, language=selected_language)
 
-                # Kilitli cevap gosterimi
                 given_val = existing_submission.get(f"q{idx}_given")
+                locked_answer_label = tr(
+                    "Soru {idx} cevabın (kilitli)",
+                    "Question {idx} answer (locked)",
+                    idx=idx,
+                )
                 if pd.notna(given_val):
                     st.text_input(
-                        f"Soru {idx} cevabın (kilitli)",
+                        locked_answer_label,
                         value=f"{float(given_val):.4f}",
                         disabled=True,
                         key=f"locked_ans_{idx}",
                     )
                 else:
                     st.text_input(
-                        f"Soru {idx} cevabın (kilitli)",
-                        value="—",
+                        locked_answer_label,
+                        value="-",
                         disabled=True,
                         key=f"locked_ans_{idx}",
                     )
 
-                # Önceki açıklama varsa göster
                 prev_exp = draft_explanations.get(idx)
                 if prev_exp is None:
                     prev_exp = str(existing_submission.get(f"q{idx}_explanation") or "")
                 explanation = st.text_area(
-                    "Çözümünü 2-3 satırla açıkla",
+                    tr("Çözümünü 2-3 satırla açıkla", "Explain your solution in 2-3 lines"),
                     key=f"exp_{active_session}_{student_id_clean}_{idx}",
                     height=88,
                     value=prev_exp if prev_exp else "",
-                    placeholder="Kullandığınız formül ve adımları kısaca yazın.",
+                    placeholder=tr(
+                        "Kullandığınız formül ve adımları kısaca yazın.",
+                        "Briefly write the formula and steps you used.",
+                    ),
                 )
                 explanations[idx] = explanation.strip()
 
@@ -2226,13 +2577,11 @@ def main():
 
         _store_comment_draft(comment_scope, explanations)
 
-        if st.button("Yorumları Kaydet", type="primary"):
+        if st.button(tr("Yorumları Kaydet", "Save Comments"), type="primary"):
             _update_explanations(student_id_clean, active_session, explanations)
             _clear_comment_draft(comment_scope)
-            st.success("Yorumlarınız kaydedildi!")
+            st.success(tr("Yorumlarınız kaydedildi!", "Your comments have been saved!"))
             st.balloons()
-
-
 if __name__ == "__main__":
     main()
 
