@@ -1,11 +1,11 @@
 {
-  "is_open": false,
-  "active_session": "20260216-233134",
-  "opened_at": "2026-02-16T23:31:34+03:00",
-  "closed_at": "2026-02-16T23:35:00+03:00",
-  "session_start": "2026-02-16T23:31:00+03:00",
-  "session_end": "2026-02-16T23:34:00+03:00",
-  "comment_end": "2026-02-16T23:35:00+03:00",
-  "quiz_duration_minutes": 3,
+  "is_open": true,
+  "active_session": "20260216-233601",
+  "opened_at": "2026-02-16T23:36:01+03:00",
+  "closed_at": "",
+  "session_start": "2026-02-16T23:35:00+03:00",
+  "session_end": "2026-02-17T00:05:00+03:00",
+  "comment_end": "2026-02-17T00:10:00+03:00",
+  "quiz_duration_minutes": 30,
   "tab_violation_enabled": false
 }

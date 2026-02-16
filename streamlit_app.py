@@ -2059,6 +2059,25 @@ def inject_styles():
                 -0.3px 0.4px 0px rgba(100,180,255,0.06),
                 0.2px -0.3px 0px rgba(150,255,130,0.05);
         }
+        .uni-brand {
+            margin: 2px 0 16px 0;
+            padding: 12px 16px;
+            border: 1px solid var(--edge);
+            border-radius: 12px;
+            background: linear-gradient(135deg, rgba(96,165,250,0.18), rgba(255,255,255,0.03));
+            text-align: center;
+            box-shadow: 0 10px 24px rgba(0,0,0,0.22);
+        }
+        .uni-brand__line {
+            color: #f8fafc;
+            line-height: 1.25;
+            letter-spacing: 0.02em;
+            font-weight: 700;
+        }
+        .uni-brand__line.sub {
+            font-size: 1.02rem;
+            opacity: 0.95;
+        }
         /* Tab-switch violation banner */
         .tab-violation-banner {
             background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
@@ -2214,10 +2233,22 @@ def main():
         )
         teacher_view()
 
+    university_line = "Ostim Technical University" if selected_language == "en" else "Ostim Teknik Üniversitesi"
+    faculty_line = "Faculty of Engineering" if selected_language == "en" else "Mühendislik Fakültesi"
+    st.markdown(
+        f"""
+        <div class="uni-brand">
+            <div class="uni-brand__line">{university_line}</div>
+            <div class="uni-brand__line sub">{faculty_line}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.title(tr("Kişiye Özel 5 Soruluk Olasılık Quizi", "Personalized 5-Question Probability Quiz"))
     st.caption(
         tr(
-            "Sayılar öğrenci numarasına göre değişir. Her oturumda her öğrenci tek kez teslim yapabilir.",
+            "Sayılar öğrenci numarasına göre değişir. Her oturumda her öğrenci bir kez teslim yapabilir.",
             "Numbers are generated from the student ID. Each student can submit only once per session.",
         )
     )
