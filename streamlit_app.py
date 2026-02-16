@@ -49,6 +49,10 @@ TEACHER_OPTIONS = [
 ANSWER_REL_TOL = 0.05
 RESULTS_PATH = Path("outputs/quiz_results.csv")
 QUIZ_CONTROL_PATH = Path("outputs/quiz_control.json")
+QUIZ_ANSWER_SCOPE_STATE_KEY = "_quiz_answer_scope"
+QUIZ_ANSWER_VALUES_STATE_KEY = "_quiz_answer_values"
+COMMENT_DRAFT_SCOPE_STATE_KEY = "_comment_draft_scope"
+COMMENT_DRAFT_VALUES_STATE_KEY = "_comment_draft_values"
 DEFAULT_QUIZ_CONTROL: dict[str, Any] = {
     "is_open": False,
     "active_session": "",
@@ -58,7 +62,7 @@ DEFAULT_QUIZ_CONTROL: dict[str, Any] = {
     "session_end": "",
     "comment_end": "",
     "quiz_duration_minutes": 0,
-    "tab_violation_enabled": True,
+    "tab_violation_enabled": False,
 }
 TAB_MONITOR_COMPONENT = components.declare_component(
     "tab_monitor",
@@ -722,6 +726,183 @@ def check_answer(user_value: float, correct_value: float, rel_tol: float) -> boo
     return math.isclose(user_value, correct_value, rel_tol=rel_tol, abs_tol=1e-4)
 
 
+def _sanitize_answer_value(value: Any) -> float:
+    """Ham degeri guvenli ve 0-1 araliginda cevaba cevirir."""
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(normalized):
+        return 0.0
+    return min(1.0, max(0.0, normalized))
+
+
+def _score_quiz_answers(
+    questions: list[dict[str, Any]],
+    given_values: list[float],
+) -> tuple[int, list[dict[str, Any]]]:
+    """Verilen cevap listesini puanlar ve kayda uygun formatta dondurur."""
+    normalized_values = [_sanitize_answer_value(val) for val in given_values]
+    if len(normalized_values) < len(questions):
+        normalized_values.extend([0.0] * (len(questions) - len(normalized_values)))
+    else:
+        normalized_values = normalized_values[: len(questions)]
+
+    score = 0
+    scored: list[dict[str, Any]] = []
+    for given, q in zip(normalized_values, questions):
+        is_correct = check_answer(given, q["answer"], q["tolerance"])
+        scored.append(
+            {
+                "given": given,
+                "correct": q["answer"],
+                "is_correct": is_correct,
+                "explanation": "",
+            }
+        )
+        if is_correct:
+            score += 20
+    return score, scored
+
+
+def _store_quiz_answer_snapshot(scope: str, answers: list[dict[str, Any]]) -> None:
+    """Quiz devam ederken son cevaplari session_state'te saklar."""
+    st.session_state[QUIZ_ANSWER_SCOPE_STATE_KEY] = scope.strip()
+    st.session_state[QUIZ_ANSWER_VALUES_STATE_KEY] = [
+        _sanitize_answer_value(item.get("given", 0.0)) for item in answers
+    ]
+
+
+def _read_quiz_answer_snapshot(scope: str, question_count: int) -> list[float] | None:
+    """Sakli cevaplari scope eslesmesi varsa okur."""
+    saved_scope = str(st.session_state.get(QUIZ_ANSWER_SCOPE_STATE_KEY) or "").strip()
+    if saved_scope != scope.strip():
+        return None
+
+    raw_values = st.session_state.get(QUIZ_ANSWER_VALUES_STATE_KEY)
+    if not isinstance(raw_values, list):
+        return None
+
+    answers = [_sanitize_answer_value(val) for val in raw_values[:question_count]]
+    if len(answers) < question_count:
+        answers.extend([0.0] * (question_count - len(answers)))
+    return answers
+
+
+def _clear_quiz_answer_snapshot(scope: str | None = None) -> None:
+    """Kaydedilen cevap anlik goruntusunu temizler."""
+    if scope is not None:
+        saved_scope = str(st.session_state.get(QUIZ_ANSWER_SCOPE_STATE_KEY) or "").strip()
+        if saved_scope != scope.strip():
+            return
+    st.session_state.pop(QUIZ_ANSWER_SCOPE_STATE_KEY, None)
+    st.session_state.pop(QUIZ_ANSWER_VALUES_STATE_KEY, None)
+
+
+def _auto_submit_expired_quiz_from_snapshot(
+    student_id: str,
+    student_name: str,
+    teacher_name: str,
+    quiz_session: str,
+    questions: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Sure doldugunda, varsa sakli cevaplari otomatik puanlayip kaydeder."""
+    session_clean = quiz_session.strip()
+    student_id_clean = student_id.strip()
+    if not session_clean or not student_id_clean:
+        return None
+
+    existing = get_existing_submission(student_id_clean, session_clean)
+    if existing is not None:
+        return existing
+
+    scope = f"{session_clean}:{student_id_clean}"
+    snapshot = _read_quiz_answer_snapshot(scope, len(questions))
+    if snapshot is None:
+        return None
+
+    score, scored = _score_quiz_answers(questions, snapshot)
+    record_result(
+        student_id_clean,
+        student_name.strip(),
+        teacher_name.strip(),
+        session_clean,
+        score,
+        scored,
+    )
+    _clear_quiz_answer_snapshot(scope)
+    return get_existing_submission(student_id_clean, session_clean)
+
+
+def _store_comment_draft(scope: str, explanations: dict[int, str]) -> None:
+    """Yorum asamasindaki aciklamalari session_state'te taslak olarak saklar."""
+    cleaned: dict[int, str] = {}
+    for idx, text in explanations.items():
+        try:
+            q_idx = int(idx)
+        except (TypeError, ValueError):
+            continue
+        if q_idx <= 0:
+            continue
+        cleaned[q_idx] = str(text or "").strip()
+
+    st.session_state[COMMENT_DRAFT_SCOPE_STATE_KEY] = scope.strip()
+    st.session_state[COMMENT_DRAFT_VALUES_STATE_KEY] = cleaned
+
+
+def _read_comment_draft(scope: str) -> dict[int, str] | None:
+    """Scope eslesirse kaydedilen yorum taslagini okur."""
+    saved_scope = str(st.session_state.get(COMMENT_DRAFT_SCOPE_STATE_KEY) or "").strip()
+    if saved_scope != scope.strip():
+        return None
+
+    raw_values = st.session_state.get(COMMENT_DRAFT_VALUES_STATE_KEY)
+    if not isinstance(raw_values, dict):
+        return None
+
+    cleaned: dict[int, str] = {}
+    for idx, text in raw_values.items():
+        try:
+            q_idx = int(idx)
+        except (TypeError, ValueError):
+            continue
+        if q_idx <= 0:
+            continue
+        cleaned[q_idx] = str(text or "").strip()
+    return cleaned
+
+
+def _clear_comment_draft(scope: str | None = None) -> None:
+    """Yorum taslak verisini temizler."""
+    if scope is not None:
+        saved_scope = str(st.session_state.get(COMMENT_DRAFT_SCOPE_STATE_KEY) or "").strip()
+        if saved_scope != scope.strip():
+            return
+    st.session_state.pop(COMMENT_DRAFT_SCOPE_STATE_KEY, None)
+    st.session_state.pop(COMMENT_DRAFT_VALUES_STATE_KEY, None)
+
+
+def _auto_submit_expired_comments_from_draft(student_id: str, quiz_session: str) -> bool:
+    """Yorum suresi biterse taslagi otomatik olarak sonuca yazar."""
+    session_clean = quiz_session.strip()
+    student_id_clean = student_id.strip()
+    if not session_clean or not student_id_clean:
+        return False
+
+    existing_submission = get_existing_submission(student_id_clean, session_clean)
+    if existing_submission is None:
+        return False
+
+    scope = f"{session_clean}:{student_id_clean}"
+    draft = _read_comment_draft(scope)
+    if draft is None:
+        return False
+
+    _update_explanations(student_id_clean, session_clean, draft)
+    _clear_comment_draft(scope)
+    return True
+
+
 def non_empty_line_count(value: str) -> int:
     """Metindeki bos olmayan satir sayisini verir."""
     return sum(1 for line in (value or "").splitlines() if line.strip())
@@ -1203,7 +1384,7 @@ def teacher_view():
             st.caption(f"Son kapanis zamani: {format_dt_for_ui(control['closed_at'])}")
 
         default_start = now.replace(second=0, microsecond=0)
-        default_duration_minutes = 15
+        default_duration_minutes = 30
         default_start_time = default_start.time().replace(tzinfo=None)
         with st.expander("Yeni Oturum Zaman Penceresi", expanded=True):
             start_date = st.date_input("Baslangic tarihi", value=default_start.date(), key="session_start_date")
@@ -1221,7 +1402,7 @@ def teacher_view():
             )
             tab_violation_enabled = st.toggle(
                 "Sekme/uygulama degisikligi tespiti aktif (ihlalde quiz sonlansin)",
-                value=True,
+                value=False,
                 key="tab_violation_toggle",
             )
             comment_minutes = st.number_input(
@@ -1615,6 +1796,7 @@ def _record_tab_violation(
             "explanation": "[IHLAL] Ekran/sekme degisikligi - quiz otomatik sonlandirildi.",
         })
     record_result(student_id, student_name, teacher_name, quiz_session, 0, scored)
+    _clear_quiz_answer_snapshot(f"{quiz_session.strip()}:{student_id.strip()}")
 
 
 def _render_violation_block() -> None:
@@ -1652,9 +1834,6 @@ def main():
 
     quiz_phase, quiz_message, quiz_control = evaluate_quiz_availability(load_quiz_control())
     active_session = str(quiz_control.get("active_session") or "")
-    if quiz_phase == "closed":
-        st.warning(quiz_message)
-        st.stop()
 
     # Faz bilgisi
     if quiz_phase == "quiz":
@@ -1670,6 +1849,8 @@ def main():
             st.caption(f"Cevap suresi kalan: ~{remaining} dk | "
                        f"Saat dilimi: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now)}")
     elif quiz_phase == "comment":
+        st.warning(quiz_message)
+    else:
         st.warning(quiz_message)
 
     st.caption(f"Baz alinan saat dilimi: {time_basis_for_ui()} | Sistem saati: {format_dt_obj_for_ui(now_in_app_timezone())}")
@@ -1702,6 +1883,18 @@ def main():
         st.stop()
     if teacher_name == "Seciniz...":
         st.info("Lutfen ogretmeninizi seciniz.")
+        st.stop()
+
+    if quiz_phase == "closed":
+        comments_auto_submitted = _auto_submit_expired_comments_from_draft(student_id_clean, active_session)
+        existing_submission = get_existing_submission(student_id_clean, active_session)
+        comment_end_at = parse_iso_datetime(str(quiz_control.get("comment_end") or ""))
+        comment_period_ended = comment_end_at is not None and now_in_app_timezone() >= comment_end_at
+        if (comments_auto_submitted or comment_period_ended) and existing_submission is not None:
+            st.success("Yorum suresi doldu. Yorumlariniz gonderilmistir.")
+
+        if existing_submission is not None and pd.notna(existing_submission.get("score")):
+            st.info(f"Kayitli puaniniz: {int(float(existing_submission['score']))}/100")
         st.stop()
 
     questions = question_bank(student_id_clean, active_session)
@@ -1741,6 +1934,7 @@ def main():
 
         existing_submission = get_existing_submission(student_id_clean, active_session)
         if existing_submission is not None:
+            _clear_quiz_answer_snapshot(f"{active_session}:{student_id_clean}")
             st.error("Bu oturumda daha once teslim yaptiniz. Quiz suresi bittiginde yorumlarinizi yazabilirsiniz.")
             if pd.notna(existing_submission.get("score")):
                 st.info(f"Kayitli puaniniz: {int(float(existing_submission['score']))}/100")
@@ -1786,6 +1980,8 @@ def main():
                     st.pyplot(fig, clear_figure=True, width="stretch")
                     plt.close(fig)
 
+        _store_quiz_answer_snapshot(f"{active_session}:{student_id_clean}", answers)
+
         confirm_submit = st.checkbox(
             "Cevaplarimi gondermek istedigime eminim. (Gonderdikten sonra degistiremezsiniz.)",
             key="confirm_submit_checkbox",
@@ -1795,24 +1991,13 @@ def main():
                 st.error("Bu oturum icin kaydiniz zaten alinmis.")
                 st.stop()
 
-            scored: list[dict[str, Any]] = []
-            score = 0
-            for ans, q in zip(answers, questions):
-                ok = check_answer(ans["given"], q["answer"], q["tolerance"])
-                scored_item = {
-                    "given": ans["given"],
-                    "correct": q["answer"],
-                    "is_correct": ok,
-                    "explanation": "",
-                }
-                scored.append(scored_item)
-                if ok:
-                    score += 20
+            score, scored = _score_quiz_answers(questions, [ans["given"] for ans in answers])
 
             st.success(f"Toplam puan: {score}/100")
             st.info("Sonucunuz kaydedildi. Quiz suresi bittikten sonra aciklama/yorum yazabileceksiniz.")
 
             record_result(student_id_clean, student_name_clean, teacher_name_clean, active_session, score, scored)
+            _clear_quiz_answer_snapshot(f"{active_session}:{student_id_clean}")
             st.balloons()
 
     # ================================================================
@@ -1821,8 +2006,20 @@ def main():
     elif quiz_phase == "comment":
         existing_submission = get_existing_submission(student_id_clean, active_session)
         if existing_submission is None:
-            st.error("Quiz surecinde cevap gondermediniz. Yorum asamasinda yeni cevap kabul edilmez.")
-            st.stop()
+            existing_submission = _auto_submit_expired_quiz_from_snapshot(
+                student_id_clean,
+                student_name_clean,
+                teacher_name_clean,
+                active_session,
+                questions,
+            )
+            if existing_submission is None:
+                st.error("Quiz surecinde cevap gondermediniz. Yorum asamasinda yeni cevap kabul edilmez.")
+                st.stop()
+            st.success("Quiz suresi doldugu icin mevcut cevaplariniz otomatik gonderildi ve puanlandi.")
+
+        comment_scope = f"{active_session}:{student_id_clean}"
+        draft_explanations = _read_comment_draft(comment_scope) or {}
 
         if pd.notna(existing_submission.get("score")):
             st.info(f"Kayitli puaniniz: {int(float(existing_submission['score']))}/100")
@@ -1856,10 +2053,12 @@ def main():
                     )
 
                 # Onceki aciklama varsa goster
-                prev_exp = str(existing_submission.get(f"q{idx}_explanation") or "")
+                prev_exp = draft_explanations.get(idx)
+                if prev_exp is None:
+                    prev_exp = str(existing_submission.get(f"q{idx}_explanation") or "")
                 explanation = st.text_area(
                     "Cozumunu 2-3 satirla acikla",
-                    key=f"exp_{idx}",
+                    key=f"exp_{active_session}_{student_id_clean}_{idx}",
                     height=88,
                     value=prev_exp if prev_exp else "",
                     placeholder="Kullandiginiz formul ve adimlari kisaca yazin.",
@@ -1871,8 +2070,11 @@ def main():
                     st.pyplot(fig, clear_figure=True, width="stretch")
                     plt.close(fig)
 
+        _store_comment_draft(comment_scope, explanations)
+
         if st.button("Yorumlari Kaydet", type="primary"):
             _update_explanations(student_id_clean, active_session, explanations)
+            _clear_comment_draft(comment_scope)
             st.success("Yorumlariniz kaydedildi!")
             st.balloons()
 
