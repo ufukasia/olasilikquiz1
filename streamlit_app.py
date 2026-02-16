@@ -49,8 +49,7 @@ TEACHER_OPTIONS = [
 ANSWER_REL_TOL = 0.05
 RESULTS_PATH = Path("outputs/quiz_results.csv")
 QUIZ_CONTROL_PATH = Path("outputs/quiz_control.json")
-QUIZ_ANSWER_SCOPE_STATE_KEY = "_quiz_answer_scope"
-QUIZ_ANSWER_VALUES_STATE_KEY = "_quiz_answer_values"
+QUIZ_ANSWER_DRAFTS_PATH = Path("outputs/quiz_answer_drafts.csv")
 COMMENT_DRAFT_SCOPE_STATE_KEY = "_comment_draft_scope"
 COMMENT_DRAFT_VALUES_STATE_KEY = "_comment_draft_values"
 DEFAULT_QUIZ_CONTROL: dict[str, Any] = {
@@ -765,38 +764,134 @@ def _score_quiz_answers(
     return score, scored
 
 
-def _store_quiz_answer_snapshot(scope: str, answers: list[dict[str, Any]]) -> None:
-    """Quiz devam ederken son cevaplari session_state'te saklar."""
-    st.session_state[QUIZ_ANSWER_SCOPE_STATE_KEY] = scope.strip()
-    st.session_state[QUIZ_ANSWER_VALUES_STATE_KEY] = [
-        _sanitize_answer_value(item.get("given", 0.0)) for item in answers
-    ]
+def _parse_quiz_scope(scope: str) -> tuple[str, str]:
+    """session:student scope metnini ayristirir."""
+    normalized = str(scope or "").strip()
+    if ":" not in normalized:
+        return "", ""
+    session_id, student_id = normalized.split(":", 1)
+    return session_id.strip(), student_id.strip()
+
+
+def _load_quiz_answer_drafts_df() -> pd.DataFrame:
+    """Quiz cevap taslak CSV'sini guvenli bicimde okur."""
+    if not QUIZ_ANSWER_DRAFTS_PATH.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(QUIZ_ANSWER_DRAFTS_PATH, encoding="utf-8")
+    except (OSError, pd.errors.ParserError):
+        return pd.DataFrame()
+
+
+def _read_quiz_answer_snapshot_record(scope: str) -> dict[str, Any] | None:
+    """Scope'a ait son quiz taslagini satir olarak okur."""
+    session_id, student_id = _parse_quiz_scope(scope)
+    if not session_id or not student_id:
+        return None
+
+    df = _load_quiz_answer_drafts_df()
+    if df.empty or "quiz_session" not in df.columns or "student_id" not in df.columns:
+        return None
+
+    mask = (
+        (df["quiz_session"].astype(str).str.strip() == session_id)
+        & (df["student_id"].astype(str).str.strip() == student_id)
+    )
+    if not mask.any():
+        return None
+
+    latest = df[mask].sort_values("updated_at", ascending=False).iloc[0]
+    return latest.to_dict()
+
+
+def _store_quiz_answer_snapshot(
+    scope: str,
+    answers: list[dict[str, Any]],
+    student_name: str = "",
+    teacher_name: str = "",
+) -> None:
+    """Quiz cevaplarini ogrenci+oturum bazli sunucu taslagi olarak saklar."""
+    session_id, student_id = _parse_quiz_scope(scope)
+    if not session_id or not student_id:
+        return
+
+    row: dict[str, Any] = {
+        "updated_at": _now_iso(),
+        "quiz_session": session_id,
+        "student_id": student_id,
+        "student_name": student_name.strip(),
+        "teacher_name": teacher_name.strip(),
+    }
+    for idx, item in enumerate(answers, start=1):
+        row[f"q{idx}_given"] = _sanitize_answer_value(item.get("given", 0.0))
+
+    QUIZ_ANSWER_DRAFTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    new_df = pd.DataFrame([row])
+    if QUIZ_ANSWER_DRAFTS_PATH.exists():
+        old_df = _load_quiz_answer_drafts_df()
+        if old_df.empty:
+            new_df.to_csv(QUIZ_ANSWER_DRAFTS_PATH, index=False, encoding="utf-8")
+            return
+
+        for col in new_df.columns:
+            if col not in old_df.columns:
+                old_df[col] = pd.NA
+        for col in old_df.columns:
+            if col not in new_df.columns:
+                new_df[col] = pd.NA
+
+        mask = (
+            (old_df["quiz_session"].astype(str).str.strip() == session_id)
+            & (old_df["student_id"].astype(str).str.strip() == student_id)
+        )
+        merged = pd.concat([old_df[~mask], new_df], ignore_index=True)
+        merged.to_csv(QUIZ_ANSWER_DRAFTS_PATH, index=False, encoding="utf-8")
+        return
+
+    new_df.to_csv(QUIZ_ANSWER_DRAFTS_PATH, index=False, encoding="utf-8")
 
 
 def _read_quiz_answer_snapshot(scope: str, question_count: int) -> list[float] | None:
-    """Sakli cevaplari scope eslesmesi varsa okur."""
-    saved_scope = str(st.session_state.get(QUIZ_ANSWER_SCOPE_STATE_KEY) or "").strip()
-    if saved_scope != scope.strip():
+    """Scope'a ait quiz taslagindan cevap listesini okur."""
+    record = _read_quiz_answer_snapshot_record(scope)
+    if record is None:
         return None
 
-    raw_values = st.session_state.get(QUIZ_ANSWER_VALUES_STATE_KEY)
-    if not isinstance(raw_values, list):
-        return None
-
-    answers = [_sanitize_answer_value(val) for val in raw_values[:question_count]]
-    if len(answers) < question_count:
-        answers.extend([0.0] * (question_count - len(answers)))
+    answers: list[float] = []
+    for idx in range(1, question_count + 1):
+        raw = record.get(f"q{idx}_given", 0.0)
+        if pd.isna(raw):
+            answers.append(0.0)
+        else:
+            answers.append(_sanitize_answer_value(raw))
     return answers
 
 
 def _clear_quiz_answer_snapshot(scope: str | None = None) -> None:
-    """Kaydedilen cevap anlik goruntusunu temizler."""
-    if scope is not None:
-        saved_scope = str(st.session_state.get(QUIZ_ANSWER_SCOPE_STATE_KEY) or "").strip()
-        if saved_scope != scope.strip():
-            return
-    st.session_state.pop(QUIZ_ANSWER_SCOPE_STATE_KEY, None)
-    st.session_state.pop(QUIZ_ANSWER_VALUES_STATE_KEY, None)
+    """Sunucu tarafindaki quiz taslak kaydini temizler."""
+    if scope is None:
+        return
+
+    session_id, student_id = _parse_quiz_scope(scope)
+    if not session_id or not student_id or not QUIZ_ANSWER_DRAFTS_PATH.exists():
+        return
+
+    df = _load_quiz_answer_drafts_df()
+    if df.empty or "quiz_session" not in df.columns or "student_id" not in df.columns:
+        return
+
+    mask = (
+        (df["quiz_session"].astype(str).str.strip() == session_id)
+        & (df["student_id"].astype(str).str.strip() == student_id)
+    )
+    if not mask.any():
+        return
+
+    kept_df = df[~mask].copy()
+    if kept_df.empty:
+        QUIZ_ANSWER_DRAFTS_PATH.unlink(missing_ok=True)
+        return
+    kept_df.to_csv(QUIZ_ANSWER_DRAFTS_PATH, index=False, encoding="utf-8")
 
 
 def _auto_submit_expired_quiz_from_snapshot(
@@ -817,15 +912,22 @@ def _auto_submit_expired_quiz_from_snapshot(
         return existing
 
     scope = f"{session_clean}:{student_id_clean}"
+    snapshot_record = _read_quiz_answer_snapshot_record(scope)
+    if snapshot_record is None:
+        return None
+
     snapshot = _read_quiz_answer_snapshot(scope, len(questions))
     if snapshot is None:
         return None
 
+    resolved_student_name = str(snapshot_record.get("student_name") or student_name).strip()
+    resolved_teacher_name = str(snapshot_record.get("teacher_name") or teacher_name).strip()
+
     score, scored = _score_quiz_answers(questions, snapshot)
     record_result(
         student_id_clean,
-        student_name.strip(),
-        teacher_name.strip(),
+        resolved_student_name,
+        resolved_teacher_name,
         session_clean,
         score,
         scored,
@@ -1885,9 +1987,26 @@ def main():
         st.info("Lutfen ogretmeninizi seciniz.")
         st.stop()
 
+    questions = question_bank(student_id_clean, active_session)
+
     if quiz_phase == "closed":
-        comments_auto_submitted = _auto_submit_expired_comments_from_draft(student_id_clean, active_session)
         existing_submission = get_existing_submission(student_id_clean, active_session)
+        quiz_auto_submitted = False
+        if existing_submission is None:
+            existing_submission = _auto_submit_expired_quiz_from_snapshot(
+                student_id_clean,
+                student_name_clean,
+                teacher_name_clean,
+                active_session,
+                questions,
+            )
+            quiz_auto_submitted = existing_submission is not None
+
+        if quiz_auto_submitted:
+            st.success("Quiz suresi bittigi icin son kaydedilen cevaplariniz otomatik gonderildi.")
+
+        comments_auto_submitted = _auto_submit_expired_comments_from_draft(student_id_clean, active_session)
+        existing_submission = existing_submission or get_existing_submission(student_id_clean, active_session)
         comment_end_at = parse_iso_datetime(str(quiz_control.get("comment_end") or ""))
         comment_period_ended = comment_end_at is not None and now_in_app_timezone() >= comment_end_at
         if (comments_auto_submitted or comment_period_ended) and existing_submission is not None:
@@ -1896,8 +2015,6 @@ def main():
         if existing_submission is not None and pd.notna(existing_submission.get("score")):
             st.info(f"Kayitli puaniniz: {int(float(existing_submission['score']))}/100")
         st.stop()
-
-    questions = question_bank(student_id_clean, active_session)
 
     # ================================================================
     # FAZ 1: QUIZ — sadece sayisal cevap, telefona minimum dokunma
@@ -1953,18 +2070,23 @@ def main():
                 "Quiz suresi bittikten sonra aciklama/yorum yazmak icin ek sure verilecektir."
             )
 
+        saved_answers = _read_quiz_answer_snapshot(violation_scope, len(questions))
         answers: list[dict[str, Any]] = []
         cols = st.columns(2, gap="large")
         for idx, q in enumerate(questions, start=1):
             with cols[(idx - 1) % 2]:
                 render_question_card(q["title"], q["text"], idx)
+                default_value = 0.0
+                if saved_answers is not None and idx - 1 < len(saved_answers):
+                    default_value = _sanitize_answer_value(saved_answers[idx - 1])
                 user_value = st.number_input(
                     "Cevabin (0-1 arasi)",
-                    key=f"ans_{idx}",
+                    key=f"ans_{active_session}_{student_id_clean}_{idx}",
                     min_value=0.0,
                     max_value=1.0,
                     step=0.001,
                     format="%.4f",
+                    value=float(default_value),
                 )
                 answers.append(
                     {
@@ -1980,11 +2102,17 @@ def main():
                     st.pyplot(fig, clear_figure=True, width="stretch")
                     plt.close(fig)
 
-        _store_quiz_answer_snapshot(f"{active_session}:{student_id_clean}", answers)
+        _store_quiz_answer_snapshot(
+            f"{active_session}:{student_id_clean}",
+            answers,
+            student_name_clean,
+            teacher_name_clean,
+        )
+        st.caption("Cevaplariniz otomatik olarak kaydediliyor.")
 
         confirm_submit = st.checkbox(
             "Cevaplarimi gondermek istedigime eminim. (Gonderdikten sonra degistiremezsiniz.)",
-            key="confirm_submit_checkbox",
+            key=f"confirm_submit_checkbox_{active_session}_{student_id_clean}",
         )
         if st.button("Cevaplari Gonder ve Puanla", type="primary", disabled=not confirm_submit):
             if get_existing_submission(student_id_clean, active_session) is not None:
