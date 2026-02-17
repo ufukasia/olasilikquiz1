@@ -533,6 +533,93 @@ def format_dt_for_ui(value: str) -> str:
     return format_dt_obj_for_ui(parsed)
 
 
+def _format_countdown_hhmmss(total_seconds: int) -> str:
+    """Saniyeyi HH:MM:SS veya MM:SS metnine cevirir."""
+    safe_seconds = max(0, int(total_seconds))
+    hours, rem = divmod(safe_seconds, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def render_live_countdown(
+    end_at: datetime,
+    *,
+    language: str = DEFAULT_UI_LANGUAGE,
+    label_tr: str,
+    label_en: str,
+    ended_tr: str,
+    ended_en: str,
+) -> None:
+    """Tarayici tarafinda saniye saniye guncellenen geri sayim satiri."""
+    is_en = normalize_ui_language(language) == "en"
+    label = label_en if is_en else label_tr
+    ended_text = ended_en if is_en else ended_tr
+
+    remaining_seconds = int((end_at - now_in_app_timezone()).total_seconds())
+    if remaining_seconds <= 0:
+        st.caption(ended_text)
+        return
+
+    initial_text = f"{label}: {_format_countdown_hhmmss(remaining_seconds)}"
+    element_id = f"countdown-{hashlib.sha1(f'{label}-{end_at.isoformat()}'.encode('utf-8')).hexdigest()[:10]}"
+    countdown_html = f"""
+    <!doctype html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background:transparent;">
+        <div id="{element_id}" style="color:#cbd5e1;font-size:0.86rem;line-height:1.35;font-family:'Space Grotesk',sans-serif;">
+            {html.escape(initial_text)}
+        </div>
+        <script>
+        (function() {{
+            const el = document.getElementById({json.dumps(element_id)});
+            const endAtMs = Date.parse({json.dumps(end_at.isoformat())});
+            const label = {json.dumps(label)};
+            const ended = {json.dumps(ended_text)};
+            if (!el || Number.isNaN(endAtMs)) {{
+                return;
+            }}
+
+            const pad = (value) => String(value).padStart(2, "0");
+            const formatCountdown = (totalSeconds) => {{
+                const safe = Math.max(0, Math.floor(totalSeconds));
+                const hours = Math.floor(safe / 3600);
+                const minutes = Math.floor((safe % 3600) / 60);
+                const seconds = safe % 60;
+                if (hours > 0) {{
+                    return `${{pad(hours)}}:${{pad(minutes)}}:${{pad(seconds)}}`;
+                }}
+                return `${{pad(minutes)}}:${{pad(seconds)}}`;
+            }};
+
+            const render = () => {{
+                const remaining = Math.floor((endAtMs - Date.now()) / 1000);
+                if (!Number.isFinite(remaining) || remaining <= 0) {{
+                    el.textContent = ended;
+                    return false;
+                }}
+                el.textContent = `${{label}}: ${{formatCountdown(remaining)}}`;
+                return true;
+            }};
+
+            if (!render()) {{
+                return;
+            }}
+            const timer = setInterval(() => {{
+                if (!render()) {{
+                    clearInterval(timer);
+                }}
+            }}, 250);
+        }})();
+        </script>
+    </body>
+    </html>
+    """
+    components.html(countdown_html, height=34)
+
+
 def auto_close_quiz_if_expired(control: dict[str, Any]) -> dict[str, Any]:
     """Yorum süresi de dahil tum s?reler dolduysa oturumu otomatik kapatir."""
     if not control.get("is_open"):
@@ -1671,24 +1758,22 @@ def teacher_view():
         if start_at is not None and now < start_at:
             st.info(tr("Oturum planlandı ancak henüz başlamadı.", "Session is scheduled but has not started yet."))
         elif end_at is not None and now < end_at:
-            remaining_seconds = int((end_at - now).total_seconds())
-            remaining_minutes = max(1, math.ceil(remaining_seconds / 60))
-            st.info(
-                tr(
-                    "Quiz cevap süresi kalan: ~{minutes} dakika",
-                    "Quiz answer time left: ~{minutes} minutes",
-                    minutes=remaining_minutes,
-                )
+            render_live_countdown(
+                end_at,
+                language=get_ui_language(),
+                label_tr="Quiz cevap süresi kalan",
+                label_en="Quiz answer time left",
+                ended_tr="Quiz cevap süresi doldu.",
+                ended_en="Quiz answer time is over.",
             )
         elif end_at is not None and now >= end_at and comment_end_at is not None and now < comment_end_at:
-            remaining_seconds = int((comment_end_at - now).total_seconds())
-            remaining_minutes = max(1, math.ceil(remaining_seconds / 60))
-            st.info(
-                tr(
-                    "Yorum yazma süresi kalan: ~{minutes} dakika",
-                    "Comment-writing time left: ~{minutes} minutes",
-                    minutes=remaining_minutes,
-                )
+            render_live_countdown(
+                comment_end_at,
+                language=get_ui_language(),
+                label_tr="Yorum yazma süresi kalan",
+                label_en="Comment-writing time left",
+                ended_tr="Yorum yazma süresi doldu.",
+                ended_en="Comment-writing period is over.",
             )
 
         st.metric(
@@ -2275,15 +2360,13 @@ def main():
         now = now_in_app_timezone()
         end_at = parse_iso_datetime(quiz_control["session_end"])
         if end_at is not None and now < end_at:
-            remaining = max(1, math.ceil((end_at - now).total_seconds() / 60))
-            st.caption(
-                tr(
-                    "Cevap süresi kalan: ~{remaining} dk | Saat dilimi: {tz} | Sistem saati: {now}",
-                    "Answer time left: ~{remaining} min | Time basis: {tz} | System time: {now}",
-                    remaining=remaining,
-                    tz=time_basis_for_ui(),
-                    now=format_dt_obj_for_ui(now),
-                )
+            render_live_countdown(
+                end_at,
+                language=selected_language,
+                label_tr="Cevap süresi kalan",
+                label_en="Answer time left",
+                ended_tr="Cevap süresi doldu.",
+                ended_en="Answer time is over.",
             )
     elif quiz_phase == "comment":
         st.warning(quiz_message)
