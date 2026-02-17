@@ -798,11 +798,15 @@ def question_bank(
             "text": (
                 (
                     f"Rejection rates are r1={r1:.3f} and r2={r2:.3f}. "
+                    "Assume the department-2 rejection rate applies to batches that passed department 1 "
+                    "(i.e., no extra dependency between departments). "
                     "What is the probability that a batch passes department 1 and is rejected in department 2?"
                 )
                 if is_en
                 else (
                     f"Reddetme oranları r1={r1:.3f}, r2={r2:.3f}. "
+                    "2. departman red oranının 1. departmanı geçen partilere uygulandığını "
+                    "(departmanlar arasında ek bağımlılık olmadığını) varsayın. "
                     "Bir partinin 1. departmanı geçip 2. departmanda reddedilme olasılığı nedir?"
                 )
             ),
@@ -825,12 +829,14 @@ def question_bank(
                 (
                     f"A and B are in series, C and D are in parallel, then both groups are connected in series. "
                     f"P(A)={p_a:.3f}, P(B)={p_b:.3f}, P(C)={p_c:.3f}, P(D)={p_d:.3f}. "
+                    "Assume component failures are statistically independent. "
                     "What is the operating probability of the whole system?"
                 )
                 if is_en
                 else (
                     f"A ve B seri, C ve D paralel, sonra iki grup tekrar seri. "
                     f"P(A)={p_a:.3f}, P(B)={p_b:.3f}, P(C)={p_c:.3f}, P(D)={p_d:.3f}. "
+                    "Bileşen arızalarının istatistiksel olarak bağımsız olduğunu varsayın. "
                     "Tüm sistemin çalışma olasılığı nedir?"
                 )
             ),
